@@ -1,7 +1,9 @@
 package com.zzhalex233.blockxray.client.render;
 
 import com.zzhalex233.blockxray.common.item.ItemProspector;
+import com.zzhalex233.blockxray.common.util.BlockTargets;
 import com.zzhalex233.blockxray.common.util.OreDictionaryBlocks;
+import com.zzhalex233.blockxray.common.util.ProspectorMatcher;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -67,7 +69,7 @@ public enum ProspectorXrayRenderer {
     private final List<RenderGroup> visibleGroups = new ArrayList<>();
     private final Set<String> lastSelectedOres = new LinkedHashSet<>();
     private final ClientWorldListener worldListener = new ClientWorldListener();
-    private OreDictionaryBlocks.Matcher oreMatcher = OreDictionaryBlocks.matcher(lastSelectedOres);
+    private ProspectorMatcher oreMatcher = OreDictionaryBlocks.matcher(lastSelectedOres);
     private ScanJob scanJob;
     private long lastScanFinishedTime;
     private BlockPos lastPlayerPos = BlockPos.ORIGIN;
@@ -78,6 +80,7 @@ public enum ProspectorXrayRenderer {
     private int lastRange = -1;
     private World lastWorld;
     private boolean hasSettings;
+    private boolean lastBlockProspector;
 
     @SubscribeEvent
     public void onRenderWorldLast(RenderWorldLastEvent event) {
@@ -98,7 +101,8 @@ public enum ProspectorXrayRenderer {
         }
 
         long now = System.currentTimeMillis();
-        Set<String> selectedOres = ItemProspector.getSelectedOres(stack);
+        ItemProspector prospector = (ItemProspector) stack.getItem();
+        Set<String> selectedOres = prospector.getSelectedTargets(stack);
         if (selectedOres.isEmpty()) {
             clearActiveState();
             return;
@@ -107,7 +111,7 @@ public enum ProspectorXrayRenderer {
         int range = ItemProspector.getRange(stack);
         BlockPos playerPos = getPlayerOnPos(minecraft.player);
         currentPlayerPos = playerPos;
-        applySettings(minecraft.world, playerPos, range, selectedOres);
+        applySettings(minecraft.world, playerPos, range, selectedOres, prospector.isBlockProspector());
         pruneOutsideCurrentChunkRange(playerPos, range);
         if (shouldStartScan(playerPos, now)) {
             startScan(minecraft.world, playerPos, range);
@@ -141,16 +145,18 @@ public enum ProspectorXrayRenderer {
         lastWorld = null;
     }
 
-    private void applySettings(World world, BlockPos playerPos, int range, Set<String> selectedOres) {
+    private void applySettings(World world, BlockPos playerPos, int range, Set<String> selectedOres, boolean blockProspector) {
         boolean selectedChanged = !selectedOres.equals(lastSelectedOres);
         boolean rangeChanged = range != lastRange;
-        if (hasSettings && !selectedChanged && !rangeChanged) {
+        boolean modeChanged = blockProspector != lastBlockProspector;
+        if (hasSettings && !selectedChanged && !rangeChanged && !modeChanged) {
             return;
         }
 
         lastSelectedOres.clear();
         lastSelectedOres.addAll(selectedOres);
-        oreMatcher = OreDictionaryBlocks.matcher(selectedOres);
+        lastBlockProspector = blockProspector;
+        oreMatcher = blockProspector ? BlockTargets.matcher(selectedOres) : OreDictionaryBlocks.matcher(selectedOres);
         lastRange = range;
         hasSettings = true;
 
@@ -214,7 +220,7 @@ public enum ProspectorXrayRenderer {
     }
 
     private boolean addOrUpdateOre(int x, int y, int z, IBlockState state) {
-        Set<String> oreNames = oreMatcher.matchingOreNames(state);
+        Set<String> oreNames = oreMatcher.matchingNames(state);
         return addOrUpdateOre(x, y, z, state, oreNames);
     }
 
@@ -378,7 +384,7 @@ public enum ProspectorXrayRenderer {
 
     private int appendOreBlockGeometry(Minecraft minecraft, World world, BufferBuilder buffer, TrackedOre ore) {
         IBlockState current = world.getBlockState(ore.pos);
-        Set<String> oreNames = oreMatcher.matchingOreNames(current);
+        Set<String> oreNames = oreMatcher.matchingNames(current);
         if (oreNames.isEmpty()) {
             ore.pendingRemoval = true;
             return 0;
@@ -574,6 +580,7 @@ public enum ProspectorXrayRenderer {
         oreMatcher = OreDictionaryBlocks.matcher(lastSelectedOres);
         scanJob = null;
         lastRange = -1;
+        lastBlockProspector = false;
         currentPlayerPos = BlockPos.ORIGIN;
         lastPrunedChunkX = Integer.MIN_VALUE;
         lastPrunedChunkZ = Integer.MIN_VALUE;
@@ -669,7 +676,7 @@ public enum ProspectorXrayRenderer {
             sections.add(new SectionScan(storage, baseX, baseY, baseZ, sectionDistanceSq(baseX, baseY, baseZ)));
         }
 
-        private boolean scan(OreDictionaryBlocks.Matcher matcher, int clusterBudget) {
+        private boolean scan(ProspectorMatcher matcher, int clusterBudget) {
             if (matcher.isEmpty()) {
                 return true;
             }
@@ -735,7 +742,7 @@ public enum ProspectorXrayRenderer {
             this.distanceSq = distanceSq;
         }
 
-        private ScanProgress scan(ScanJob job, OreDictionaryBlocks.Matcher matcher,
+        private ScanProgress scan(ScanJob job, ProspectorMatcher matcher,
                                   int blockBudget, int clusterBudget, long deadline) {
             int checked = 0;
             while (!done && blockBudget > 0) {

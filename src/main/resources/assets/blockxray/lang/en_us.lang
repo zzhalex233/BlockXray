@@ -1,7 +1,8 @@
-item.blockxray.prospector.name=Prospector
+item.blockxray.oreprospector.name=Ore Prospector
+item.blockxray.blockprospector.name=Block Prospector
 gui.blockxray.title=Prospector
 gui.blockxray.done=Done
 gui.blockxray.clear=Clear
 gui.blockxray.selected=%s selected
 gui.blockxray.range=Chunk radius: %s / %s
-gui.blockxray.no_ores=No ore dictionary blocks found
+gui.blockxray.no_ores=No matching targets found

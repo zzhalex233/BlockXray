@@ -2,6 +2,7 @@ package com.zzhalex233.blockxray.common.item;
 
 import com.zzhalex233.blockxray.BlockXray;
 import com.zzhalex233.blockxray.Reference;
+import com.zzhalex233.blockxray.common.util.BlockTargets;
 import com.zzhalex233.blockxray.config.BlockXrayConfig;
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.entity.player.EntityPlayer;
@@ -19,17 +20,23 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 public class ItemProspector extends Item {
-    private static final String TAG_SELECTED_ORES = "SelectedOres";
+    private static final String TAG_SELECTED_TARGETS = "SelectedOres";
     private static final String TAG_RANGE = "Range";
     public static final int DEFAULT_RANGE = 1;
     public static final int MIN_RANGE = 1;
     public static final int DEFAULT_MAX_RANGE = 8;
+    private final boolean blockProspector;
 
-    public ItemProspector() {
-        setRegistryName(Reference.MOD_ID, "prospector");
-        setTranslationKey(Reference.MOD_ID + ".prospector");
+    public ItemProspector(String name, boolean blockProspector) {
+        this.blockProspector = blockProspector;
+        setRegistryName(Reference.MOD_ID, name);
+        setTranslationKey(Reference.MOD_ID + "." + name);
         setCreativeTab(CreativeTabs.TOOLS);
         setMaxStackSize(1);
+    }
+
+    public boolean isBlockProspector() {
+        return blockProspector;
     }
 
     @Override
@@ -41,20 +48,20 @@ public class ItemProspector extends Item {
         return new ActionResult<>(EnumActionResult.SUCCESS, stack);
     }
 
-    public static Set<String> getSelectedOres(ItemStack stack) {
-        Set<String> ores = new LinkedHashSet<>();
+    public Set<String> getSelectedTargets(ItemStack stack) {
+        Set<String> targets = new LinkedHashSet<>();
         NBTTagCompound tag = stack.getTagCompound();
         if (tag == null) {
-            return ores;
+            return targets;
         }
-        NBTTagList list = tag.getTagList(TAG_SELECTED_ORES, Constants.NBT.TAG_STRING);
+        NBTTagList list = tag.getTagList(TAG_SELECTED_TARGETS, Constants.NBT.TAG_STRING);
         for (int i = 0; i < list.tagCount(); i++) {
-            String ore = list.getStringTagAt(i);
-            if (isOreName(ore)) {
-                ores.add(ore);
+            String target = list.getStringTagAt(i);
+            if (isValidTarget(target)) {
+                targets.add(target);
             }
         }
-        return ores;
+        return targets;
     }
 
     public static int getRange(ItemStack stack) {
@@ -62,7 +69,7 @@ public class ItemProspector extends Item {
         return clampRange(tag == null || !tag.hasKey(TAG_RANGE) ? DEFAULT_RANGE : tag.getInteger(TAG_RANGE));
     }
 
-    public static void setSettings(ItemStack stack, Set<String> selectedOres, int range) {
+    public void setSettings(ItemStack stack, Set<String> selectedTargets, int range) {
         NBTTagCompound tag = stack.getTagCompound();
         if (tag == null) {
             tag = new NBTTagCompound();
@@ -70,12 +77,12 @@ public class ItemProspector extends Item {
         }
 
         NBTTagList list = new NBTTagList();
-        for (String ore : selectedOres) {
-            if (isOreName(ore)) {
-                list.appendTag(new net.minecraft.nbt.NBTTagString(ore));
+        for (String target : selectedTargets) {
+            if (isValidTarget(target)) {
+                list.appendTag(new net.minecraft.nbt.NBTTagString(target));
             }
         }
-        tag.setTag(TAG_SELECTED_ORES, list);
+        tag.setTag(TAG_SELECTED_TARGETS, list);
         tag.setInteger(TAG_RANGE, clampRange(range));
     }
 
@@ -87,7 +94,7 @@ public class ItemProspector extends Item {
         return BlockXrayConfig.prospectorMaxRange();
     }
 
-    private static boolean isOreName(String ore) {
-        return ore != null && ore.startsWith("ore");
+    private boolean isValidTarget(String target) {
+        return target != null && (blockProspector ? BlockTargets.isValidName(target) : target.startsWith("ore"));
     }
 }

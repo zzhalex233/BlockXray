@@ -1,6 +1,7 @@
 package com.zzhalex233.blockxray.client.gui;
 
 import com.zzhalex233.blockxray.common.item.ItemProspector;
+import com.zzhalex233.blockxray.common.util.BlockTargets;
 import com.zzhalex233.blockxray.common.util.OreDictionaryBlocks;
 import com.zzhalex233.blockxray.network.BlockXrayNetwork;
 import com.zzhalex233.blockxray.network.message.MessageProspectorSettings;
@@ -34,9 +35,10 @@ public class GuiProspector extends GuiScreen {
 
     private final ItemStack stack;
     private final EnumHand hand;
-    private final List<String> oreNames;
+    private final ItemProspector prospector;
+    private final List<String> targets;
     private final Map<String, ItemStack> icons;
-    private final Set<String> selectedOres = new LinkedHashSet<>();
+    private final Set<String> selectedTargets = new LinkedHashSet<>();
 
     private GuiTextField searchField;
     private int range;
@@ -61,9 +63,10 @@ public class GuiProspector extends GuiScreen {
     public GuiProspector(ItemStack stack, EnumHand hand) {
         this.stack = stack;
         this.hand = hand;
-        this.oreNames = OreDictionaryBlocks.oreNames();
-        this.icons = OreDictionaryBlocks.oreIcons();
-        this.selectedOres.addAll(ItemProspector.getSelectedOres(stack));
+        this.prospector = (ItemProspector) stack.getItem();
+        this.targets = prospector.isBlockProspector() ? BlockTargets.names() : OreDictionaryBlocks.oreNames();
+        this.icons = prospector.isBlockProspector() ? BlockTargets.icons() : OreDictionaryBlocks.oreIcons();
+        this.selectedTargets.addAll(prospector.getSelectedTargets(stack));
         this.range = ItemProspector.getRange(stack);
     }
 
@@ -105,7 +108,7 @@ public class GuiProspector extends GuiScreen {
             syncSettings();
             mc.displayGuiScreen(null);
         } else if (button.id == BUTTON_CLEAR) {
-            selectedOres.clear();
+            selectedTargets.clear();
             syncSettings();
         } else if (button.id == BUTTON_RANGE_DOWN) {
             range = ItemProspector.clampRange(range - 1);
@@ -149,9 +152,9 @@ public class GuiProspector extends GuiScreen {
         }
 
         if (mouseButton == 0 && isMouseOver(selectedListX, selectedListY, selectedListW, selectedListH, mouseX, mouseY)
-                && overScrollbar(mouseX, selectedListX, selectedListW, selectedListH, selectedOres.size())) {
+                && overScrollbar(mouseX, selectedListX, selectedListW, selectedListH, selectedTargets.size())) {
             draggingSelectedScrollbar = true;
-            selectedScrollOffset = updateScrollFromMouse(mouseY, selectedListY, selectedListH, selectedOres.size());
+            selectedScrollOffset = updateScrollFromMouse(mouseY, selectedListY, selectedListH, selectedTargets.size());
             return;
         }
 
@@ -165,7 +168,7 @@ public class GuiProspector extends GuiScreen {
             scrollOffset = updateScrollFromMouse(mouseY, listY, listH, filteredOres().size());
         }
         if (draggingSelectedScrollbar) {
-            selectedScrollOffset = updateScrollFromMouse(mouseY, selectedListY, selectedListH, selectedOres.size());
+            selectedScrollOffset = updateScrollFromMouse(mouseY, selectedListY, selectedListH, selectedTargets.size());
         }
     }
 
@@ -230,7 +233,7 @@ public class GuiProspector extends GuiScreen {
             int index = scrollOffset + i;
             int y = listY + i * ROW_HEIGHT;
             String ore = filtered.get(index);
-            boolean selected = selectedOres.contains(ore);
+            boolean selected = selectedTargets.contains(ore);
             boolean hovered = isMouseOver(listX, y, listW - 6, ROW_HEIGHT, mouseX, mouseY);
 
             if (selected) {
@@ -258,7 +261,7 @@ public class GuiProspector extends GuiScreen {
         drawRect(panelX, panelY, panelX + panelW, panelY + panelH, 0x80000000);
         fontRenderer.drawString(I18n.format("gui.blockxray.title"), panelX + 6, panelY + 6, 0xFFFFFF);
 
-        String count = I18n.format("gui.blockxray.selected", selectedOres.size());
+        String count = I18n.format("gui.blockxray.selected", selectedTargets.size());
         fontRenderer.drawString(count, panelX + panelW - 6 - fontRenderer.getStringWidth(count), panelY + 6, 0xFFFFAA);
 
         String rangeText = I18n.format("gui.blockxray.range", range, ItemProspector.getMaxRange());
@@ -272,7 +275,7 @@ public class GuiProspector extends GuiScreen {
         int rows = Math.max(0, selectedListH / ROW_HEIGHT);
         int i = 0;
         int skipped = 0;
-        for (String ore : selectedOres) {
+        for (String ore : selectedTargets) {
             if (skipped++ < selectedScrollOffset) {
                 continue;
             }
@@ -282,7 +285,7 @@ public class GuiProspector extends GuiScreen {
             drawSelectedOre(ore, selectedListY + i * ROW_HEIGHT);
             i++;
         }
-        drawScrollbar(selectedListX, selectedListY, selectedListW, selectedListH, selectedOres.size(), selectedScrollOffset);
+        drawScrollbar(selectedListX, selectedListY, selectedListW, selectedListH, selectedTargets.size(), selectedScrollOffset);
     }
 
     private void drawRangeMeter() {
@@ -372,7 +375,7 @@ public class GuiProspector extends GuiScreen {
     private List<String> filteredOres() {
         String filter = searchField == null ? "" : searchField.getText().trim().toLowerCase(Locale.ROOT);
         List<String> filtered = new ArrayList<>();
-        for (String ore : oreNames) {
+        for (String ore : targets) {
             String displayName = localizedName(ore);
             if (filter.isEmpty()
                     || ore.toLowerCase(Locale.ROOT).contains(filter)
@@ -410,20 +413,20 @@ public class GuiProspector extends GuiScreen {
 
     private void clampSelectedScroll() {
         int visibleRows = Math.max(1, selectedListH / ROW_HEIGHT);
-        int max = Math.max(0, selectedOres.size() - visibleRows);
+        int max = Math.max(0, selectedTargets.size() - visibleRows);
         selectedScrollOffset = Math.max(0, Math.min(max, selectedScrollOffset));
     }
 
     private void toggleOre(String ore) {
-        if (!selectedOres.remove(ore)) {
-            selectedOres.add(ore);
+        if (!selectedTargets.remove(ore)) {
+            selectedTargets.add(ore);
         }
         syncSettings();
     }
 
     private void syncSettings() {
-        ItemProspector.setSettings(stack, selectedOres, range);
-        BlockXrayNetwork.getChannel().sendToServer(new MessageProspectorSettings(hand, range, selectedOres));
+        prospector.setSettings(stack, selectedTargets, range);
+        BlockXrayNetwork.getChannel().sendToServer(new MessageProspectorSettings(hand, range, selectedTargets));
     }
 
     private static boolean isMouseOver(int x, int y, int w, int h, int mouseX, int mouseY) {

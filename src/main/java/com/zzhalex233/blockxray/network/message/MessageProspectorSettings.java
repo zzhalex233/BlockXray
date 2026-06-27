@@ -35,7 +35,7 @@ public class MessageProspectorSettings implements IMessage {
         int count = buf.readInt();
         for (int i = 0; i < count; i++) {
             String ore = ByteBufUtils.readUTF8String(buf);
-            if (ore.startsWith("ore")) {
+            if (ore != null && !ore.isEmpty()) {
                 selectedOres.add(ore);
             }
         }
@@ -58,7 +58,7 @@ public class MessageProspectorSettings implements IMessage {
             player.getServerWorld().addScheduledTask(() -> {
                 ItemStack stack = player.getHeldItem(message.hand);
                 if (stack.getItem() instanceof ItemProspector) {
-                    ItemProspector.setSettings(stack, message.selectedOres, message.range);
+                    ((ItemProspector) stack.getItem()).setSettings(stack, message.selectedOres, message.range);
                     player.inventoryContainer.detectAndSendChanges();
                 }
             });

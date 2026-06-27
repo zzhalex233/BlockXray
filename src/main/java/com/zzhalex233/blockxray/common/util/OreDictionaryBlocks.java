@@ -98,7 +98,7 @@ public final class OreDictionaryBlocks {
         return false;
     }
 
-    public static final class Matcher {
+    public static final class Matcher implements ProspectorMatcher {
         private static final Matcher EMPTY = new Matcher(new HashMap<>());
 
         private final Map<Block, MetaMatcher> blocks;
@@ -107,10 +107,12 @@ public final class OreDictionaryBlocks {
             this.blocks = blocks;
         }
 
+        @Override
         public boolean isEmpty() {
             return blocks.isEmpty();
         }
 
+        @Override
         public boolean matches(IBlockState state) {
             if (state == null || blocks.isEmpty()) {
                 return false;
@@ -121,7 +123,8 @@ public final class OreDictionaryBlocks {
             return metaMatcher != null && metaMatcher.matches(block.getMetaFromState(state));
         }
 
-        public Set<String> matchingOreNames(IBlockState state) {
+        @Override
+        public Set<String> matchingNames(IBlockState state) {
             if (state == null || blocks.isEmpty()) {
                 return Collections.emptySet();
             }
@@ -129,6 +132,10 @@ public final class OreDictionaryBlocks {
             Block block = state.getBlock();
             MetaMatcher metaMatcher = blocks.get(block);
             return metaMatcher == null ? Collections.emptySet() : metaMatcher.matchingOreNames(block.getMetaFromState(state));
+        }
+
+        public Set<String> matchingOreNames(IBlockState state) {
+            return matchingNames(state);
         }
     }
 

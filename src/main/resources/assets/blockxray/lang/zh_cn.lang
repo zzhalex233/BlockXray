@@ -1,7 +1,8 @@
-item.blockxray.prospector.name=探矿仪
+item.blockxray.oreprospector.name=探矿仪
+item.blockxray.blockprospector.name=方块探测仪
 gui.blockxray.title=探矿仪
 gui.blockxray.done=完成
 gui.blockxray.clear=清空
 gui.blockxray.selected=已选 %s
 gui.blockxray.range=区块半径：%s / %s
-gui.blockxray.no_ores=未找到矿词方块
+gui.blockxray.no_ores=未找到可探测方块
