@@ -5,6 +5,8 @@ import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.util.ResourceLocation;
+import net.minecraftforge.fml.common.registry.ForgeRegistries;
 import net.minecraftforge.oredict.OreDictionary;
 
 import java.util.ArrayList;
@@ -17,18 +19,27 @@ import java.util.Map;
 import java.util.Set;
 
 public final class OreDictionaryBlocks {
+    private static final String TARGET_SEPARATOR = "|";
+    private static final String META_SEPARATOR = "@";
+
     private OreDictionaryBlocks() {
     }
 
     public static List<String> oreNames() {
-        List<String> names = new ArrayList<>();
+        Set<String> names = new LinkedHashSet<>();
         for (String name : OreDictionary.getOreNames()) {
             if (name.startsWith("ore") && containsBlock(name)) {
-                names.add(name);
+                for (ItemStack stack : OreDictionary.getOres(name, false)) {
+                    String target = targetId(name, stack);
+                    if (target != null) {
+                        names.add(target);
+                    }
+                }
             }
         }
-        names.sort(String::compareToIgnoreCase);
-        return names;
+        List<String> sorted = new ArrayList<>(names);
+        sorted.sort(String::compareToIgnoreCase);
+        return sorted;
     }
 
     public static boolean matchesAny(IBlockState state, Set<String> selectedOres) {
@@ -41,8 +52,23 @@ public final class OreDictionaryBlocks {
         }
 
         Map<Block, MetaMatcher> blocks = new HashMap<>();
-        for (String oreName : selectedOres) {
-            if (oreName == null || !oreName.startsWith("ore")) {
+        for (String targetName : selectedOres) {
+            if (targetName == null) {
+                continue;
+            }
+            Target target = parseTarget(targetName);
+            if (target != null) {
+                MetaMatcher metaMatcher = blocks.computeIfAbsent(target.block, ignored -> new MetaMatcher());
+                if (target.meta == OreDictionary.WILDCARD_VALUE) {
+                    metaMatcher.matchAll(targetName);
+                } else {
+                    metaMatcher.match(target.meta, targetName);
+                }
+                continue;
+            }
+
+            String oreName = oreName(targetName);
+            if (!oreName.startsWith("ore")) {
                 continue;
             }
             for (ItemStack stack : OreDictionary.getOres(oreName, false)) {
@@ -58,21 +84,74 @@ public final class OreDictionaryBlocks {
                 MetaMatcher metaMatcher = blocks.computeIfAbsent(block, ignored -> new MetaMatcher());
                 int meta = stack.getMetadata();
                 if (meta == OreDictionary.WILDCARD_VALUE) {
-                    metaMatcher.matchAll(oreName);
+                    metaMatcher.matchAll(targetName);
                 } else {
-                    metaMatcher.match(meta, oreName);
+                    metaMatcher.match(meta, targetName);
                 }
-                matchActualBlockStates(oreName, stack.getItem(), block, metaMatcher);
+                matchActualBlockStates(oreName, targetName, stack.getItem(), block, metaMatcher);
             }
         }
         return blocks.isEmpty() ? Matcher.EMPTY : new Matcher(blocks);
     }
 
-    private static void matchActualBlockStates(String oreName, Item item, Block block, MetaMatcher metaMatcher) {
+    public static boolean isValidTarget(String targetName) {
+        return !expandTarget(targetName).isEmpty();
+    }
+
+    public static Set<String> expandTarget(String targetName) {
+        Set<String> targets = new LinkedHashSet<>();
+        if (targetName == null) {
+            return targets;
+        }
+        Target target = parseTarget(targetName);
+        if (target != null) {
+            if (target.oreName.startsWith("ore") && targetExists(targetName, target)) {
+                targets.add(targetName);
+            }
+            return targets;
+        }
+        if (targetName.contains(TARGET_SEPARATOR)) {
+            return targets;
+        }
+        if (!targetName.startsWith("ore")) {
+            return targets;
+        }
+        for (ItemStack stack : OreDictionary.getOres(targetName, false)) {
+            String expanded = targetId(targetName, stack);
+            if (expanded != null) {
+                targets.add(expanded);
+            }
+        }
+        return targets;
+    }
+
+    public static String oreName(String targetName) {
+        if (targetName == null) {
+            return "";
+        }
+        int separator = targetName.indexOf(TARGET_SEPARATOR);
+        return separator < 0 ? targetName : targetName.substring(0, separator);
+    }
+
+    public static IBlockState state(String targetName) {
+        Target target = parseTarget(targetName);
+        if (target == null) {
+            return null;
+        }
+
+        int meta = target.meta == OreDictionary.WILDCARD_VALUE ? 0 : target.meta;
+        try {
+            return target.block.getStateFromMeta(meta);
+        } catch (RuntimeException ignored) {
+            return target.block.getDefaultState();
+        }
+    }
+
+    private static void matchActualBlockStates(String oreName, String targetName, Item item, Block block, MetaMatcher metaMatcher) {
         for (IBlockState state : block.getBlockState().getValidStates()) {
             int meta = block.getMetaFromState(state);
             if (hasOreName(new ItemStack(item, 1, meta), oreName)) {
-                metaMatcher.match(meta, oreName);
+                metaMatcher.match(meta, targetName);
             }
         }
     }
@@ -181,13 +260,87 @@ public final class OreDictionaryBlocks {
     public static Map<String, ItemStack> oreIcons() {
         Map<String, ItemStack> icons = new LinkedHashMap<>();
         for (String name : oreNames()) {
-            for (ItemStack stack : OreDictionary.getOres(name, false)) {
-                if (!stack.isEmpty() && Block.getBlockFromItem(stack.getItem()) != net.minecraft.init.Blocks.AIR) {
-                    icons.put(name, stack.copy());
-                    break;
+            Target target = parseTarget(name);
+            if (target != null) {
+                Item item = Item.getItemFromBlock(target.block);
+                int meta = target.meta == OreDictionary.WILDCARD_VALUE ? 0 : target.meta;
+                ItemStack stack = new ItemStack(item, 1, meta);
+                if (!stack.isEmpty()) {
+                    icons.put(name, stack);
                 }
             }
         }
         return icons;
+    }
+
+    private static String targetId(String oreName, ItemStack stack) {
+        if (stack.isEmpty()) {
+            return null;
+        }
+        Block block = Block.getBlockFromItem(stack.getItem());
+        ResourceLocation blockName = block.getRegistryName();
+        if (block == Blocks.AIR || blockName == null) {
+            return null;
+        }
+        int meta = stack.getMetadata();
+        return oreName + TARGET_SEPARATOR + blockName + META_SEPARATOR
+                + (meta == OreDictionary.WILDCARD_VALUE ? "*" : Integer.toString(meta));
+    }
+
+    private static Target parseTarget(String targetName) {
+        int separator = targetName == null ? -1 : targetName.indexOf(TARGET_SEPARATOR);
+        if (separator < 0) {
+            return null;
+        }
+        int metaSeparator = targetName.lastIndexOf(META_SEPARATOR);
+        if (metaSeparator <= separator + 1 || metaSeparator == targetName.length() - 1) {
+            return null;
+        }
+        String oreName = targetName.substring(0, separator);
+        Block block = blockByName(targetName.substring(separator + 1, metaSeparator));
+        if (block == null || block == Blocks.AIR) {
+            return null;
+        }
+        int meta;
+        String metaName = targetName.substring(metaSeparator + 1);
+        if ("*".equals(metaName)) {
+            meta = OreDictionary.WILDCARD_VALUE;
+        } else {
+            try {
+                meta = Integer.parseInt(metaName);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return new Target(oreName, block, meta);
+    }
+
+    private static boolean targetExists(String targetName, Target target) {
+        for (ItemStack stack : OreDictionary.getOres(target.oreName, false)) {
+            if (targetName.equals(targetId(target.oreName, stack))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Block blockByName(String name) {
+        try {
+            return ForgeRegistries.BLOCKS.getValue(new ResourceLocation(name));
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static final class Target {
+        private final String oreName;
+        private final Block block;
+        private final int meta;
+
+        private Target(String oreName, Block block, int meta) {
+            this.oreName = oreName;
+            this.block = block;
+            this.meta = meta;
+        }
     }
 }

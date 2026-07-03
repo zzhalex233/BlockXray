@@ -3,7 +3,11 @@ package com.zzhalex233.blockxray.common.util;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
+import net.minecraft.init.Items;
+import net.minecraft.creativetab.CreativeTabs;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.util.NonNullList;
 import net.minecraft.util.ResourceLocation;
 import net.minecraftforge.fml.common.registry.ForgeRegistries;
 
@@ -17,27 +21,27 @@ import java.util.Map;
 import java.util.Set;
 
 public final class BlockTargets {
+    private static final String META_SEPARATOR = "@";
+
     private BlockTargets() {
     }
 
     public static List<String> names() {
-        List<String> names = new ArrayList<>();
+        Set<String> names = new LinkedHashSet<>();
         for (Block block : ForgeRegistries.BLOCKS) {
-            ResourceLocation name = block.getRegistryName();
-            if (name != null && block != Blocks.AIR) {
-                names.add(name.toString());
-            }
+            names.addAll(targetIds(block));
         }
-        names.sort(String::compareToIgnoreCase);
-        return names;
+        List<String> sorted = new ArrayList<>(names);
+        sorted.sort(String::compareToIgnoreCase);
+        return sorted;
     }
 
     public static Map<String, ItemStack> icons() {
         Map<String, ItemStack> icons = new LinkedHashMap<>();
         for (String name : names()) {
-            Block block = blockByName(name);
-            if (block != null && block != Blocks.AIR) {
-                ItemStack stack = new ItemStack(block);
+            Target target = parseTarget(name);
+            if (target != null) {
+                ItemStack stack = new ItemStack(target.block, 1, target.meta);
                 if (!stack.isEmpty()) {
                     icons.put(name, stack);
                 }
@@ -51,22 +55,170 @@ public final class BlockTargets {
             return Matcher.EMPTY;
         }
 
-        Map<Block, String> blocks = new HashMap<>();
+        Map<Block, MetaMatcher> blocks = new HashMap<>();
         for (String name : selectedBlocks) {
-            if (name == null) {
-                continue;
-            }
-            Block block = blockByName(name);
-            if (block != null && block != Blocks.AIR) {
-                blocks.put(block, name);
+            for (String targetName : expandTarget(name)) {
+                Target target = parseTarget(targetName);
+                if (target != null) {
+                    blocks.computeIfAbsent(target.block, ignored -> new MetaMatcher()).match(target.meta, targetName);
+                }
             }
         }
         return blocks.isEmpty() ? Matcher.EMPTY : new Matcher(blocks);
     }
 
     public static boolean isValidName(String name) {
+        return !expandTarget(name).isEmpty();
+    }
+
+    public static Set<String> expandTarget(String name) {
+        Set<String> targets = new LinkedHashSet<>();
+        Target target = parseTarget(name);
+        if (target != null) {
+            Set<Integer> metas = itemMetas(target.block);
+            String normalized = targetId(target.block, target.meta, metas.size() <= 1);
+            Set<String> ids = targetIds(target.block);
+            if (ids.contains(normalized)) {
+                targets.add(normalized);
+            } else {
+                String itemMetaTarget = targetId(target.block, targetMeta(stateFromMeta(target.block, target.meta)), metas.size() <= 1);
+                if (ids.contains(itemMetaTarget)) {
+                    targets.add(itemMetaTarget);
+                }
+            }
+            return targets;
+        }
+
         Block block = blockByName(name);
-        return block != null && block != Blocks.AIR;
+        if (block != null && block != Blocks.AIR) {
+            targets.addAll(targetIds(block));
+        }
+        return targets;
+    }
+
+    public static IBlockState state(String name) {
+        Target target = parseTarget(name);
+        if (target != null) {
+            return stateFromMeta(target.block, target.meta);
+        }
+        Block block = blockByName(name);
+        return block == null || block == Blocks.AIR ? null : block.getDefaultState();
+    }
+
+    private static Set<String> targetIds(Block block) {
+        Set<String> targets = new LinkedHashSet<>();
+        ResourceLocation name = block == null ? null : block.getRegistryName();
+        if (name == null || block == Blocks.AIR) {
+            return targets;
+        }
+        Set<Integer> metas = itemMetas(block);
+        boolean single = metas.size() <= 1;
+        for (int meta : metas) {
+            targets.add(targetId(name, meta, single));
+        }
+        if (targets.isEmpty()) {
+            targets.add(name.toString());
+        }
+        return targets;
+    }
+
+    private static Set<Integer> itemMetas(Block block) {
+        Set<Integer> metas = new LinkedHashSet<>();
+        Item item = Item.getItemFromBlock(block);
+        if (item == null || item == Items.AIR) {
+            return metas;
+        }
+
+        NonNullList<ItemStack> stacks = NonNullList.create();
+        collectItemStacks(item, stacks);
+        if (stacks.isEmpty()) {
+            collectBlockStacks(block, stacks);
+        }
+
+        for (ItemStack stack : stacks) {
+            if (!stack.isEmpty() && Block.getBlockFromItem(stack.getItem()) == block) {
+                metas.add(stack.getMetadata());
+            }
+        }
+        if (item.getHasSubtypes()) {
+            collectDroppedMetas(block, metas);
+        }
+        if (metas.isEmpty()) {
+            metas.add(0);
+        }
+        return metas;
+    }
+
+    private static void collectItemStacks(Item item, NonNullList<ItemStack> stacks) {
+        try {
+            item.getSubItems(CreativeTabs.SEARCH, stacks);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private static void collectBlockStacks(Block block, NonNullList<ItemStack> stacks) {
+        try {
+            block.getSubBlocks(CreativeTabs.SEARCH, stacks);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private static void collectDroppedMetas(Block block, Set<Integer> metas) {
+        for (IBlockState state : block.getBlockState().getValidStates()) {
+            metas.add(targetMeta(state));
+        }
+    }
+
+    private static String targetId(Block block, int meta) {
+        ResourceLocation name = block.getRegistryName();
+        return name == null ? "" : targetId(name, meta, itemMetas(block).size() <= 1);
+    }
+
+    private static String targetId(Block block, int meta, boolean omitMeta) {
+        ResourceLocation name = block.getRegistryName();
+        return name == null ? "" : targetId(name, meta, omitMeta);
+    }
+
+    private static String targetId(ResourceLocation name, int meta, boolean omitMeta) {
+        return omitMeta ? name.toString() : name + META_SEPARATOR + meta;
+    }
+
+    private static Target parseTarget(String name) {
+        int metaSeparator = name == null ? -1 : name.lastIndexOf(META_SEPARATOR);
+        if (metaSeparator <= 0 || metaSeparator == name.length() - 1) {
+            Block block = blockByName(name);
+            if (block == null || block == Blocks.AIR) {
+                return null;
+            }
+            Set<Integer> metas = itemMetas(block);
+            return metas.size() == 1 ? new Target(block, metas.iterator().next()) : null;
+        }
+
+        Block block = blockByName(name.substring(0, metaSeparator));
+        if (block == null || block == Blocks.AIR) {
+            return null;
+        }
+        try {
+            return new Target(block, Integer.parseInt(name.substring(metaSeparator + 1)));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static IBlockState stateFromMeta(Block block, int meta) {
+        try {
+            return block.getStateFromMeta(meta);
+        } catch (RuntimeException ignored) {
+            return block.getDefaultState();
+        }
+    }
+
+    private static int targetMeta(IBlockState state) {
+        try {
+            return state.getBlock().damageDropped(state);
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
     }
 
     private static Block blockByName(String name) {
@@ -78,11 +230,11 @@ public final class BlockTargets {
     }
 
     private static final class Matcher implements ProspectorMatcher {
-        private static final Matcher EMPTY = new Matcher(Collections.emptyMap());
+        private static final Matcher EMPTY = new Matcher(new HashMap<>());
 
-        private final Map<Block, String> blocks;
+        private final Map<Block, MetaMatcher> blocks;
 
-        private Matcher(Map<Block, String> blocks) {
+        private Matcher(Map<Block, MetaMatcher> blocks) {
             this.blocks = blocks;
         }
 
@@ -93,7 +245,11 @@ public final class BlockTargets {
 
         @Override
         public boolean matches(IBlockState state) {
-            return state != null && blocks.containsKey(state.getBlock());
+            if (state == null) {
+                return false;
+            }
+            MetaMatcher matcher = blocks.get(state.getBlock());
+            return matcher != null && matcher.matches(targetMeta(state));
         }
 
         @Override
@@ -101,13 +257,35 @@ public final class BlockTargets {
             if (state == null) {
                 return Collections.emptySet();
             }
-            String name = blocks.get(state.getBlock());
-            if (name == null) {
-                return Collections.emptySet();
-            }
-            Set<String> names = new LinkedHashSet<>();
-            names.add(name);
-            return names;
+            MetaMatcher matcher = blocks.get(state.getBlock());
+            return matcher == null ? Collections.emptySet() : matcher.matchingNames(targetMeta(state));
+        }
+    }
+
+    private static final class MetaMatcher {
+        private final Map<Integer, Set<String>> namesByMeta = new HashMap<>();
+
+        private void match(int meta, String name) {
+            namesByMeta.computeIfAbsent(meta, ignored -> new LinkedHashSet<>()).add(name);
+        }
+
+        private boolean matches(int meta) {
+            return namesByMeta.containsKey(meta);
+        }
+
+        private Set<String> matchingNames(int meta) {
+            Set<String> names = namesByMeta.get(meta);
+            return names == null ? Collections.emptySet() : names;
+        }
+    }
+
+    private static final class Target {
+        private final Block block;
+        private final int meta;
+
+        private Target(Block block, int meta) {
+            this.block = block;
+            this.meta = meta;
         }
     }
 }

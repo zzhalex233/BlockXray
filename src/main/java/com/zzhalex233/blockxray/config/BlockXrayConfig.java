@@ -9,16 +9,16 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 
 @Config(modid = Reference.MOD_ID, name = Reference.MOD_ID)
 public final class BlockXrayConfig {
-    @Config.Name("prospectorMaxRange")
+    @Config.Name("prospectorMaxChunkRadius")
     @Config.Comment("Maximum selectable chunk radius for the Prospector.")
-    @Config.RangeInt(min = 1, max = 8)
-    public static int prospectorMaxRange = 8;
+    @Config.RangeInt(min = 1, max = 256)
+    public static int prospectorMaxChunkRadius = 8;
 
     private BlockXrayConfig() {
     }
 
-    public static int prospectorMaxRange() {
-        return Math.max(1, Math.min(8, prospectorMaxRange));
+    public static int prospectorMaxChunkRadius() {
+        return Math.max(1, Math.min(256, prospectorMaxChunkRadius));
     }
 
     public static void sync() {

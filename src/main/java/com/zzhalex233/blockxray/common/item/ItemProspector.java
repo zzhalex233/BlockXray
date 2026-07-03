@@ -3,6 +3,7 @@ package com.zzhalex233.blockxray.common.item;
 import com.zzhalex233.blockxray.BlockXray;
 import com.zzhalex233.blockxray.Reference;
 import com.zzhalex233.blockxray.common.util.BlockTargets;
+import com.zzhalex233.blockxray.common.util.OreDictionaryBlocks;
 import com.zzhalex233.blockxray.config.BlockXrayConfig;
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.entity.player.EntityPlayer;
@@ -24,7 +25,7 @@ public class ItemProspector extends Item {
     private static final String TAG_RANGE = "Range";
     public static final int DEFAULT_RANGE = 1;
     public static final int MIN_RANGE = 1;
-    public static final int DEFAULT_MAX_RANGE = 8;
+    public static final int DEFAULT_MAX_CHUNK_RADIUS = 8;
     private final boolean blockProspector;
 
     public ItemProspector(String name, boolean blockProspector) {
@@ -57,9 +58,7 @@ public class ItemProspector extends Item {
         NBTTagList list = tag.getTagList(TAG_SELECTED_TARGETS, Constants.NBT.TAG_STRING);
         for (int i = 0; i < list.tagCount(); i++) {
             String target = list.getStringTagAt(i);
-            if (isValidTarget(target)) {
-                targets.add(target);
-            }
+            addValidTargets(targets, target);
         }
         return targets;
     }
@@ -78,8 +77,8 @@ public class ItemProspector extends Item {
 
         NBTTagList list = new NBTTagList();
         for (String target : selectedTargets) {
-            if (isValidTarget(target)) {
-                list.appendTag(new net.minecraft.nbt.NBTTagString(target));
+            for (String validTarget : validTargets(target)) {
+                list.appendTag(new net.minecraft.nbt.NBTTagString(validTarget));
             }
         }
         tag.setTag(TAG_SELECTED_TARGETS, list);
@@ -87,14 +86,21 @@ public class ItemProspector extends Item {
     }
 
     public static int clampRange(int range) {
-        return Math.max(MIN_RANGE, Math.min(BlockXrayConfig.prospectorMaxRange(), range));
+        return Math.max(MIN_RANGE, Math.min(BlockXrayConfig.prospectorMaxChunkRadius(), range));
     }
 
     public static int getMaxRange() {
-        return BlockXrayConfig.prospectorMaxRange();
+        return BlockXrayConfig.prospectorMaxChunkRadius();
     }
 
-    private boolean isValidTarget(String target) {
-        return target != null && (blockProspector ? BlockTargets.isValidName(target) : target.startsWith("ore"));
+    private void addValidTargets(Set<String> targets, String target) {
+        targets.addAll(validTargets(target));
+    }
+
+    private Set<String> validTargets(String target) {
+        if (blockProspector) {
+            return BlockTargets.expandTarget(target);
+        }
+        return OreDictionaryBlocks.expandTarget(target);
     }
 }

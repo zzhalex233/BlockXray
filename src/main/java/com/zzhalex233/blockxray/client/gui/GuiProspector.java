@@ -1,15 +1,15 @@
 package com.zzhalex233.blockxray.client.gui;
 
+import com.zzhalex233.blockxray.client.render.ProspectorGuiRenderUtil;
 import com.zzhalex233.blockxray.common.item.ItemProspector;
 import com.zzhalex233.blockxray.common.util.BlockTargets;
 import com.zzhalex233.blockxray.common.util.OreDictionaryBlocks;
 import com.zzhalex233.blockxray.network.BlockXrayNetwork;
 import com.zzhalex233.blockxray.network.message.MessageProspectorSettings;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiTextField;
-import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.client.resources.I18n;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.EnumHand;
@@ -243,15 +243,12 @@ public class GuiProspector extends GuiScreen {
                 drawRect(listX, y, listX + listW - 6, y + ROW_HEIGHT, 0x20FFFFFF);
             }
 
-            ItemStack icon = icons.get(ore);
-            if (icon != null && !icon.isEmpty()) {
-                drawItemIcon(icon, listX + 4, y + 3);
-            }
+            drawTargetIcon(ore, listX + 4, y + 3);
 
             int textW = listW - 52;
             String displayName = localizedName(ore);
             fontRenderer.drawString(trimWithDots(displayName, textW), listX + 24, y + 3, selected ? 0xFFFFA0 : 0xFFFFFF);
-            fontRenderer.drawString(trimWithDots(ore, textW), listX + 24, y + 13, 0x888888);
+            fontRenderer.drawString(trimWithDots(targetLabel(ore), textW), listX + 24, y + 13, 0x888888);
             drawSelectionMark(listX + listW - 18, y + 7, selected);
         }
         drawScrollbar(listX, listY, listW, listH, filtered.size(), scrollOffset);
@@ -302,23 +299,19 @@ public class GuiProspector extends GuiScreen {
 
     private void drawSelectedOre(String ore, int y) {
         drawRect(panelX + 6, y, panelX + panelW - 6, y + ROW_HEIGHT, 0x20FFFFFF);
-        ItemStack icon = icons.get(ore);
-        if (icon != null && !icon.isEmpty()) {
-            drawItemIcon(icon, panelX + 10, y + 3);
-        }
+        drawTargetIcon(ore, panelX + 10, y + 3);
         int textW = panelW - 40;
         fontRenderer.drawString(trimWithDots(localizedName(ore), textW), panelX + 30, y + 3, 0xFFFFA0);
-        fontRenderer.drawString(trimWithDots(ore, textW), panelX + 30, y + 13, 0x888888);
+        fontRenderer.drawString(trimWithDots(targetLabel(ore), textW), panelX + 30, y + 13, 0x888888);
     }
 
-    private void drawItemIcon(ItemStack icon, int x, int y) {
-        GlStateManager.pushMatrix();
-        RenderHelper.enableGUIStandardItemLighting();
-        GlStateManager.enableDepth();
-        itemRender.renderItemAndEffectIntoGUI(icon, x, y);
-        RenderHelper.disableStandardItemLighting();
-        GlStateManager.disableDepth();
-        GlStateManager.popMatrix();
+    private void drawTargetIcon(String target, int x, int y) {
+        ItemStack icon = icons.get(target);
+        ProspectorGuiRenderUtil.drawBlockTargetIcon(mc, itemRender, icon, targetState(target), x, y, 16);
+    }
+
+    private IBlockState targetState(String target) {
+        return prospector.isBlockProspector() ? BlockTargets.state(target) : OreDictionaryBlocks.state(target);
     }
 
     private void drawSelectionMark(int x, int y, boolean selected) {
@@ -377,8 +370,9 @@ public class GuiProspector extends GuiScreen {
         List<String> filtered = new ArrayList<>();
         for (String ore : targets) {
             String displayName = localizedName(ore);
+            String label = targetLabel(ore);
             if (filter.isEmpty()
-                    || ore.toLowerCase(Locale.ROOT).contains(filter)
+                    || label.toLowerCase(Locale.ROOT).contains(filter)
                     || displayName.toLowerCase(Locale.ROOT).contains(filter)) {
                 filtered.add(ore);
             }
@@ -390,6 +384,10 @@ public class GuiProspector extends GuiScreen {
         ItemStack icon = icons.get(ore);
         String name = icon == null || icon.isEmpty() ? ore : icon.getDisplayName();
         return name == null || name.trim().isEmpty() ? ore : name;
+    }
+
+    private String targetLabel(String target) {
+        return prospector.isBlockProspector() ? target : OreDictionaryBlocks.oreName(target);
     }
 
     private String trimWithDots(String text, int width) {
