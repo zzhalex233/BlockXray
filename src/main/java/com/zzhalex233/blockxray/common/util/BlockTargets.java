@@ -41,13 +41,34 @@ public final class BlockTargets {
         for (String name : names()) {
             Target target = parseTarget(name);
             if (target != null) {
-                ItemStack stack = new ItemStack(target.block, 1, target.meta);
+                ItemStack stack = iconStack(target);
                 if (!stack.isEmpty()) {
                     icons.put(name, stack);
                 }
             }
         }
         return icons;
+    }
+
+    public static String displayName(String name) {
+        Target target = parseTarget(name);
+        Block block = target == null ? blockByName(name) : target.block;
+        if (block == null || block == Blocks.AIR) {
+            return name;
+        }
+
+        if (target != null) {
+            ItemStack stack = iconStack(target);
+            if (!stack.isEmpty()) {
+                String itemName = stack.getDisplayName();
+                if (validDisplayName(itemName, name)) {
+                    return itemName;
+                }
+            }
+        }
+
+        String blockName = block.getLocalizedName();
+        return validDisplayName(blockName, block.getTranslationKey() + ".name") ? blockName : name;
     }
 
     public static ProspectorMatcher matcher(Set<String> selectedBlocks) {
@@ -60,7 +81,12 @@ public final class BlockTargets {
             for (String targetName : expandTarget(name)) {
                 Target target = parseTarget(targetName);
                 if (target != null) {
-                    blocks.computeIfAbsent(target.block, ignored -> new MetaMatcher()).match(target.meta, targetName);
+                    MetaMatcher matcher = blocks.computeIfAbsent(target.block, ignored -> new MetaMatcher());
+                    if (target.matchAll) {
+                        matcher.matchAll(targetName);
+                    } else {
+                        matcher.match(target.meta, targetName);
+                    }
                 }
             }
         }
@@ -82,9 +108,16 @@ public final class BlockTargets {
         Set<String> targets = new LinkedHashSet<>();
         Target target = parseTarget(name);
         if (target != null) {
+            Set<String> ids = targetIds(target.block);
+            if (target.matchAll) {
+                ResourceLocation blockName = target.block.getRegistryName();
+                if (blockName != null && ids.contains(blockName.toString())) {
+                    targets.add(blockName.toString());
+                }
+                return targets;
+            }
             Set<Integer> metas = itemMetas(target.block);
             String normalized = targetId(target.block, target.meta, metas.size() <= 1);
-            Set<String> ids = targetIds(target.block);
             if (ids.contains(normalized)) {
                 targets.add(normalized);
             } else {
@@ -106,7 +139,7 @@ public final class BlockTargets {
     public static IBlockState state(String name) {
         Target target = parseTarget(name);
         if (target != null) {
-            return stateFromMeta(target.block, target.meta);
+            return target.matchAll ? target.block.getDefaultState() : stateFromMeta(target.block, target.meta);
         }
         Block block = blockByName(name);
         return block == null || block == Blocks.AIR ? null : block.getDefaultState();
@@ -176,6 +209,27 @@ public final class BlockTargets {
         }
     }
 
+    private static ItemStack iconStack(Target target) {
+        int meta = target.matchAll ? 0 : target.meta;
+        Item item = Item.getItemFromBlock(target.block);
+        if (item != null && item != Items.AIR) {
+            ItemStack stack = new ItemStack(item, 1, meta);
+            if (!stack.isEmpty()) {
+                return stack;
+            }
+        }
+        try {
+            ItemStack stack = new ItemStack(target.block, 1, meta);
+            return stack.isEmpty() ? ItemStack.EMPTY : stack;
+        } catch (RuntimeException ignored) {
+            return ItemStack.EMPTY;
+        }
+    }
+
+    private static boolean validDisplayName(String name, String missingValue) {
+        return name != null && !name.trim().isEmpty() && !name.equals(missingValue);
+    }
+
     private static String targetId(Block block, int meta) {
         ResourceLocation name = block.getRegistryName();
         return name == null ? "" : targetId(name, meta, itemMetas(block).size() <= 1);
@@ -198,6 +252,9 @@ public final class BlockTargets {
                 return null;
             }
             Set<Integer> metas = itemMetas(block);
+            if (metas.isEmpty()) {
+                return new Target(block, 0, true);
+            }
             return metas.size() == 1 ? new Target(block, metas.iterator().next()) : null;
         }
 
@@ -271,28 +328,46 @@ public final class BlockTargets {
 
     private static final class MetaMatcher {
         private final Map<Integer, Set<String>> namesByMeta = new HashMap<>();
+        private final Set<String> allNames = new LinkedHashSet<>();
 
         private void match(int meta, String name) {
             namesByMeta.computeIfAbsent(meta, ignored -> new LinkedHashSet<>()).add(name);
         }
 
+        private void matchAll(String name) {
+            allNames.add(name);
+        }
+
         private boolean matches(int meta) {
-            return namesByMeta.containsKey(meta);
+            return !allNames.isEmpty() || namesByMeta.containsKey(meta);
         }
 
         private Set<String> matchingNames(int meta) {
             Set<String> names = namesByMeta.get(meta);
-            return names == null ? Collections.emptySet() : names;
+            if (allNames.isEmpty()) {
+                return names == null ? Collections.emptySet() : names;
+            }
+            Set<String> result = new LinkedHashSet<>(allNames);
+            if (names != null) {
+                result.addAll(names);
+            }
+            return result;
         }
     }
 
     private static final class Target {
         private final Block block;
         private final int meta;
+        private final boolean matchAll;
 
         private Target(Block block, int meta) {
+            this(block, meta, false);
+        }
+
+        private Target(Block block, int meta, boolean matchAll) {
             this.block = block;
             this.meta = meta;
+            this.matchAll = matchAll;
         }
     }
 }

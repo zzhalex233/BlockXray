@@ -381,6 +381,9 @@ public class GuiProspector extends GuiScreen {
     }
 
     private String localizedName(String ore) {
+        if (prospector.isBlockProspector()) {
+            return BlockTargets.displayName(ore);
+        }
         ItemStack icon = icons.get(ore);
         String name = icon == null || icon.isEmpty() ? ore : icon.getDisplayName();
         return name == null || name.trim().isEmpty() ? ore : name;
