@@ -71,6 +71,13 @@ public final class BlockTargets {
         return !expandTarget(name).isEmpty();
     }
 
+    public static Set<String> targetsForState(IBlockState state) {
+        if (state == null) {
+            return Collections.emptySet();
+        }
+        return expandTarget(targetId(state.getBlock(), targetMeta(state)));
+    }
+
     public static Set<String> expandTarget(String name) {
         Set<String> targets = new LinkedHashSet<>();
         Target target = parseTarget(name);

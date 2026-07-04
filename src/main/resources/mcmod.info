@@ -1,9 +1,9 @@
 [{
     "modid": "blockxray",
     "name": "BlockXray",
-    "version": "1.0.0",
+    "version": "${mod_version}",
     "mcversion": "1.12.2",
-    "description": "",
+    "description": "Adds prospectors which can reveal selected ores or blocks.",
     "authorList": ["zzhalex233"],
     "credits": "",
     "url": "https://github.com/zzhalex233/BlockXray",

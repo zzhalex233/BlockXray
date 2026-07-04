@@ -5,15 +5,20 @@ import com.zzhalex233.blockxray.Reference;
 import com.zzhalex233.blockxray.common.util.BlockTargets;
 import com.zzhalex233.blockxray.common.util.OreDictionaryBlocks;
 import com.zzhalex233.blockxray.config.BlockXrayConfig;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.init.SoundEvents;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.EnumActionResult;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.util.EnumHand;
+import net.minecraft.util.SoundCategory;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.Constants;
 
@@ -47,6 +52,35 @@ public class ItemProspector extends Item {
             BlockXray.proxy.openProspectorGui(stack, hand);
         }
         return new ActionResult<>(EnumActionResult.SUCCESS, stack);
+    }
+
+    @Override
+    public EnumActionResult onItemUse(EntityPlayer player, World world, BlockPos pos, EnumHand hand,
+                                      EnumFacing facing, float hitX, float hitY, float hitZ) {
+        if (!player.isSneaking()) {
+            return EnumActionResult.PASS;
+        }
+
+        Set<String> targets = targetsForState(world.getBlockState(pos));
+        if (targets.isEmpty()) {
+            return EnumActionResult.FAIL;
+        }
+        if (!world.isRemote) {
+            ItemStack stack = player.getHeldItem(hand);
+            Set<String> selected = getSelectedTargets(stack);
+            boolean remove = selected.containsAll(targets);
+            if (remove) {
+                selected.removeAll(targets);
+            } else {
+                selected.addAll(targets);
+            }
+            setSettings(stack, selected, getRange(stack));
+            player.inventoryContainer.detectAndSendChanges();
+            if (!remove) {
+                world.playSound(null, pos, SoundEvents.BLOCK_NOTE_PLING, SoundCategory.PLAYERS, 0.45F, 1.25F);
+            }
+        }
+        return EnumActionResult.SUCCESS;
     }
 
     public Set<String> getSelectedTargets(ItemStack stack) {
@@ -102,5 +136,9 @@ public class ItemProspector extends Item {
             return BlockTargets.expandTarget(target);
         }
         return OreDictionaryBlocks.expandTarget(target);
+    }
+
+    private Set<String> targetsForState(IBlockState state) {
+        return blockProspector ? BlockTargets.targetsForState(state) : OreDictionaryBlocks.targetsForState(state);
     }
 }

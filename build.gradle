@@ -100,6 +100,10 @@ dependencies {
 apply from: 'gradle/scripts/dependencies.gradle'
 
 processResources {
+    inputs.property 'mod_version', mod_version
+    filesMatching('**/mcmod.info') {
+        expand(mod_version: mod_version)
+    }
     rename '(.+_at.cfg)', 'META-INF/$1'
 }
 

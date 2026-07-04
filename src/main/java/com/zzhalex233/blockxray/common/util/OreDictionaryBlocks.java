@@ -98,6 +98,34 @@ public final class OreDictionaryBlocks {
         return !expandTarget(targetName).isEmpty();
     }
 
+    public static Set<String> targetsForState(IBlockState state) {
+        Set<String> targets = new LinkedHashSet<>();
+        if (state == null) {
+            return targets;
+        }
+
+        Block block = state.getBlock();
+        int stateMeta = block.getMetaFromState(state);
+        for (String oreName : OreDictionary.getOreNames()) {
+            if (!oreName.startsWith("ore")) {
+                continue;
+            }
+            for (ItemStack stack : OreDictionary.getOres(oreName, false)) {
+                if (stack.isEmpty() || Block.getBlockFromItem(stack.getItem()) != block) {
+                    continue;
+                }
+
+                String target = targetId(oreName, stack);
+                int meta = stack.getMetadata();
+                if (target != null && (meta == OreDictionary.WILDCARD_VALUE || meta == stateMeta
+                        || hasOreName(new ItemStack(stack.getItem(), 1, stateMeta), oreName))) {
+                    targets.add(target);
+                }
+            }
+        }
+        return targets;
+    }
+
     public static Set<String> expandTarget(String targetName) {
         Set<String> targets = new LinkedHashSet<>();
         if (targetName == null) {

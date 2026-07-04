@@ -82,6 +82,8 @@ public enum ProspectorXrayRenderer {
     private static final int BLOCK_VERTEX_UV_OFFSET = 16;
     private static final int BLOCK_VERTEX_LIGHTMAP_OFFSET = 24;
     private static final int FULL_BRIGHT = 0x00F000F0;
+    private static final float XRAY_DEPTH_OFFSET_FACTOR = 2.0F;
+    private static final float XRAY_DEPTH_OFFSET_UNITS = 4.0F;
     private static final long SNAPSHOT_TIME_BUDGET_NANOS = 1_000_000L;
     private static final long EMPTY_RESCAN_INTERVAL_MILLIS = 1200L;
     private static final long REFRESH_INTERVAL_MILLIS = 5000L;
@@ -128,7 +130,7 @@ public enum ProspectorXrayRenderer {
 
         ItemStack stack = findHeldProspector(minecraft.player);
         if (stack.isEmpty()) {
-            clearActiveState();
+            suspendCachedState(minecraft.player);
             return;
         }
 
@@ -136,7 +138,7 @@ public enum ProspectorXrayRenderer {
         ItemProspector prospector = (ItemProspector) stack.getItem();
         Set<String> selectedOres = prospector.getSelectedTargets(stack);
         if (selectedOres.isEmpty()) {
-            clearActiveState();
+            suspendCachedState(minecraft.player);
             return;
         }
 
@@ -407,12 +409,12 @@ public enum ProspectorXrayRenderer {
         camera.setPosition(viewerX, viewerY, viewerZ);
         Vec3d view = viewer.getLook(event.getPartialTicks());
 
+        overlayBlockAccess.setWorld(world);
         rebuildDirtyGroups(minecraft, world);
         if (renderGroups.isEmpty()) {
             return;
         }
 
-        overlayBlockAccess.setWorld(world);
         minecraft.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
         GlStateManager.pushMatrix();
         GlStateManager.translate(-viewerX, -viewerY, -viewerZ);
@@ -454,7 +456,7 @@ public enum ProspectorXrayRenderer {
         visibleGroups.sort(Comparator.comparingDouble((RenderGroup group) -> group.depth).reversed());
 
         if (!visibleGroups.isEmpty()) {
-            if (hasVisibleTileEntityOverlays() && renderStencilDepthOverlays(world, partialTicks)) {
+            if (hasVisibleDepthResolvedOverlays() && renderStencilDepthOverlays(world, partialTicks)) {
                 return;
             }
             enableBlockVboClientState();
@@ -470,9 +472,9 @@ public enum ProspectorXrayRenderer {
         }
     }
 
-    private boolean hasVisibleTileEntityOverlays() {
+    private boolean hasVisibleDepthResolvedOverlays() {
         for (RenderGroup group : visibleGroups) {
-            if (group.hasTileEntityOverlay()) {
+            if (group.requiresDepthResolvedOverlay()) {
                 return true;
             }
         }
@@ -540,6 +542,7 @@ public enum ProspectorXrayRenderer {
         GlStateManager.colorMask(false, false, false, false);
         GlStateManager.depthMask(false);
         GlStateManager.depthFunc(GL11.GL_GREATER);
+        enableXRayDepthOffset();
         GL11.glStencilFunc(GL11.GL_ALWAYS, stencilMask, stencilMask);
         GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_REPLACE);
 
@@ -562,6 +565,7 @@ public enum ProspectorXrayRenderer {
         GlStateManager.clearDepth(1.0D);
         GlStateManager.clear(GL11.GL_DEPTH_BUFFER_BIT);
         GlStateManager.depthFunc(GL11.GL_LEQUAL);
+        enableXRayDepthOffset();
         GL11.glStencilMask(0x00);
         GL11.glStencilFunc(GL11.GL_EQUAL, stencilMask, stencilMask);
         GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_KEEP);
@@ -637,6 +641,47 @@ public enum ProspectorXrayRenderer {
     private static boolean usesTileEntityRenderer(IBlockState state, IBakedModel model) {
         return state.getRenderType() == EnumBlockRenderType.ENTITYBLOCK_ANIMATED
                 || model != null && model.isBuiltInRenderer();
+    }
+
+    private boolean requiresDepthResolvedOverlay(IBlockState state, IBakedModel model, BlockPos pos) {
+        if (usesTileEntityRenderer(state, model)) {
+            return true;
+        }
+        IBlockState renderState = actualRenderState(state, pos);
+        return renderState.getRenderType() != EnumBlockRenderType.MODEL
+                || !renderState.isFullCube()
+                || !renderState.isOpaqueCube()
+                || rendersOutsideSolidLayer(renderState)
+                || hasComplexBakedGeometry(renderState, model);
+    }
+
+    private static boolean rendersOutsideSolidLayer(IBlockState state) {
+        return state.getBlock().canRenderInLayer(state, BlockRenderLayer.CUTOUT_MIPPED)
+                || state.getBlock().canRenderInLayer(state, BlockRenderLayer.CUTOUT)
+                || state.getBlock().canRenderInLayer(state, BlockRenderLayer.TRANSLUCENT);
+    }
+
+    private static boolean hasComplexBakedGeometry(IBlockState state, IBakedModel model) {
+        if (model == null || model.isBuiltInRenderer()) {
+            return false;
+        }
+        if (quadCount(model, state, null) > 0) {
+            return true;
+        }
+        for (EnumFacing facing : EnumFacing.values()) {
+            if (quadCount(model, state, facing) != 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int quadCount(IBakedModel model, IBlockState state, EnumFacing facing) {
+        try {
+            return model.getQuads(state, facing, 0L).size();
+        } catch (RuntimeException ignored) {
+            return 2;
+        }
     }
 
     private void buildLayerBuffers(BlockRendererDispatcher dispatcher, Collection<TrackedOre> ores, EnumMap<BlockRenderLayer, VertexBuffer> buffers) {
@@ -821,6 +866,7 @@ public enum ProspectorXrayRenderer {
         GlStateManager.enableDepth();
         GlStateManager.depthFunc(GL11.GL_LEQUAL);
         GlStateManager.depthMask(true);
+        enableXRayDepthOffset();
         GlStateManager.enableAlpha();
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
         GlStateManager.disableBlend();
@@ -839,15 +885,13 @@ public enum ProspectorXrayRenderer {
         GlStateManager.enableAlpha();
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
         GlStateManager.depthMask(false);
-        GlStateManager.doPolygonOffset(1.0F, 1.0F);
-        GlStateManager.enablePolygonOffset();
+        enableXRayDepthOffset();
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     private static void restoreXRayState() {
         OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.disablePolygonOffset();
-        GlStateManager.doPolygonOffset(0.0F, 0.0F);
+        disableXRayDepthOffset();
         GlStateManager.depthMask(true);
         GlStateManager.depthFunc(GL11.GL_LEQUAL);
         GlStateManager.disableBlend();
@@ -858,6 +902,16 @@ public enum ProspectorXrayRenderer {
         GlStateManager.enableTexture2D();
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         GL11.glLineWidth(1.0F);
+    }
+
+    private static void enableXRayDepthOffset() {
+        GlStateManager.doPolygonOffset(XRAY_DEPTH_OFFSET_FACTOR, XRAY_DEPTH_OFFSET_UNITS);
+        GlStateManager.enablePolygonOffset();
+    }
+
+    private static void disableXRayDepthOffset() {
+        GlStateManager.disablePolygonOffset();
+        GlStateManager.doPolygonOffset(0.0F, 0.0F);
     }
 
     private static void putFilledBox(BufferBuilder buffer, AxisAlignedBB box) {
@@ -978,6 +1032,19 @@ public enum ProspectorXrayRenderer {
         lastPrunedRange = Integer.MIN_VALUE;
         hasSettings = false;
         lastScanFinishedTime = 0L;
+    }
+
+    private void suspendCachedState(EntityPlayer player) {
+        if (!hasSettings) {
+            return;
+        }
+        currentPlayerPos = getPlayerOnPos(player);
+        if (lastRange > 0) {
+            pruneOutsideCurrentChunkRange(currentPlayerPos, lastRange);
+        }
+        if (!oreBlocks.isEmpty()) {
+            lastScanFinishedTime = System.currentTimeMillis();
+        }
     }
 
     private void clearRenderedBlocks() {
@@ -1325,6 +1392,7 @@ public enum ProspectorXrayRenderer {
         private double centerZ;
         private double depth;
         private int renderedCount;
+        private boolean depthResolvedOverlay;
         private boolean dirty = true;
 
         private RenderGroup(long key) {
@@ -1350,6 +1418,7 @@ public enum ProspectorXrayRenderer {
         private void rebuild(Minecraft minecraft, World world) {
             deleteBuffers();
             renderedCount = compileOreBlockGeometry(minecraft, world, ores, layerBuffers);
+            depthResolvedOverlay = findDepthResolvedOverlay(minecraft);
             dirty = false;
             removePending();
         }
@@ -1415,6 +1484,23 @@ public enum ProspectorXrayRenderer {
 
         private boolean hasRenderableGeometry() {
             return renderedCount > 0 && (!layerBuffers.isEmpty() || hasTileEntityOverlay());
+        }
+
+        private boolean requiresDepthResolvedOverlay() {
+            return depthResolvedOverlay;
+        }
+
+        private boolean findDepthResolvedOverlay(Minecraft minecraft) {
+            for (TrackedOre ore : ores) {
+                if (ore.pendingRemoval) {
+                    continue;
+                }
+                IBakedModel model = minecraft.getBlockRendererDispatcher().getModelForState(ore.state);
+                if (ProspectorXrayRenderer.this.requiresDepthResolvedOverlay(ore.state, model, ore.pos)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private boolean hasTileEntityOverlay() {
