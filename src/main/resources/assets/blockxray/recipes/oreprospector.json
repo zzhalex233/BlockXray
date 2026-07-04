@@ -1,16 +1,16 @@
 {
   "type": "minecraft:crafting_shaped",
   "pattern": [
-    " D ",
-    "DCD",
-    " D "
+    "  H",
+    " S ",
+    "S  "
   ],
   "key": {
-    "C": {
-      "item": "minecraft:compass"
+    "H": {
+      "item": "minecraft:diamond_ore"
     },
-    "D": {
-      "item": "minecraft:diamond"
+    "S": {
+      "item": "minecraft:stick"
     }
   },
   "result": {

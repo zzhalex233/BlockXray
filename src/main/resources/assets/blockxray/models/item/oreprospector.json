@@ -59,16 +59,16 @@
 			"scale": [0.5, 0.5, 0.5]
 		},
 		"gui": {
-			"rotation": [-130, -14.5, -140],
+			"rotation": [-180, 15, -140],
 			"translation": [-1.75, -1.75, 0],
-			"scale": [0.75, 0.75, 0.75]
+			"scale": [0.8, 0.8, 0.8]
 		},
 		"head": {
 			"translation": [0, -13, 0],
 			"scale": [2, 2, 2]
 		},
 		"fixed": {
-			"rotation": [0, 0, 45],
+			"rotation": [0, 0, 40],
 			"translation": [1.75, -1.75, 0],
 			"scale": [0.75, 0.75, 0.75]
 		},

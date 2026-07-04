@@ -1,16 +1,16 @@
 {
   "type": "minecraft:crafting_shaped",
   "pattern": [
-    " D ",
-    "DOD",
-    " D "
+    "  H",
+    " S ",
+    "S  "
   ],
   "key": {
-    "D": {
-      "item": "minecraft:diamond"
+    "H": {
+      "item": "minecraft:diamond_block"
     },
-    "O": {
-      "item": "blockxray:oreprospector"
+    "S": {
+      "item": "minecraft:stick"
     }
   },
   "result": {

@@ -77,6 +77,10 @@ public enum ProspectorXrayRenderer {
     private static final int SCAN_RESULT_APPLY_BUDGET = 768;
     private static final int GROUP_SIZE_BITS = 2;
     private static final int REBUILD_GROUPS_PER_FRAME = 32;
+    private static final int ACTIVE_RENDER_STEP_BLOCKS = 2;
+    private static final double ACTIVE_RENDER_LOOK_DOT = 0.996194698D;
+    private static final double ACTIVE_RENDER_CONE_COS = -1.0D;
+    private static final double ACTIVE_RENDER_NEAR_RADIUS_SQ = 256.0D;
     private static final int BLOCK_VERTEX_STRIDE = 28;
     private static final int BLOCK_VERTEX_COLOR_OFFSET = 12;
     private static final int BLOCK_VERTEX_UV_OFFSET = 16;
@@ -114,6 +118,16 @@ public enum ProspectorXrayRenderer {
     private World lastWorld;
     private boolean hasSettings;
     private boolean lastBlockProspector;
+    private boolean activeRenderShapeValid;
+    private int activeRenderGroupCount;
+    private int lastActiveRenderX = Integer.MIN_VALUE;
+    private int lastActiveRenderZ = Integer.MIN_VALUE;
+    private int lastActiveRenderRange = Integer.MIN_VALUE;
+    private double lastActiveRenderPlayerX;
+    private double lastActiveRenderPlayerZ;
+    private double lastActiveRenderLookX;
+    private double lastActiveRenderLookZ = 1.0D;
+    private long activeRenderGeneration;
     private volatile int scanGeneration;
 
     @SubscribeEvent
@@ -153,8 +167,10 @@ public enum ProspectorXrayRenderer {
 
         pumpScanJob(minecraft.world);
         applyScanResults(minecraft.world);
+        Vec3d view = minecraft.player.getLook(event.getPartialTicks());
+        refreshActiveRenderGroups(minecraft.player.posX, minecraft.player.posZ, view, range);
 
-        if (!oreBlocks.isEmpty()) {
+        if (activeRenderGroupCount > 0) {
             drawXRayOreBlocks(event);
         }
     }
@@ -192,6 +208,7 @@ public enum ProspectorXrayRenderer {
         oreMatcher = blockProspector ? BlockTargets.matcher(selectedOres) : OreDictionaryBlocks.matcher(selectedOres);
         lastRange = range;
         hasSettings = true;
+        activeRenderShapeValid = false;
 
         if (oreMatcher.isEmpty()) {
             clearRenderedBlocks();
@@ -338,6 +355,7 @@ public enum ProspectorXrayRenderer {
         oreBlocks.put(ore);
         groupFor(ore.x, ore.y, ore.z).add(ore);
         markNeighborGroupsDirty(ore.x, ore.y, ore.z);
+        activateOreForCurrentShape(ore);
         return true;
     }
 
@@ -355,17 +373,21 @@ public enum ProspectorXrayRenderer {
             return;
         }
 
+        refreshVisibleOreAt(world, pos);
+        markPositionUrgent(pos.getX(), pos.getY(), pos.getZ());
+        for (EnumFacing face : EnumFacing.values()) {
+            BlockPos neighbor = pos.offset(face);
+            refreshVisibleOreAt(world, neighbor);
+            markPositionUrgent(neighbor.getX(), neighbor.getY(), neighbor.getZ());
+        }
+        markNeighborGroupsDirty(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    private boolean refreshVisibleOreAt(World world, BlockPos pos) {
         int x = pos.getX();
         int y = pos.getY();
         int z = pos.getZ();
-        if (isOutsideLastRange(x, y, z)) {
-            removeOre(x, y, z);
-        } else if (oreMatcher.matches(newState)) {
-            addOrUpdateOre(x, y, z, newState);
-        } else if (oreBlocks.get(x, y, z) != null || oreMatcher.matches(oldState)) {
-            removeOre(x, y, z);
-        }
-        markNeighborGroupsDirty(x, y, z);
+        return isOutsideLastRange(x, y, z) ? removeOre(x, y, z) : addOrUpdateVisibleOre(world, x, y, z);
     }
 
     private void handleRenderRangeUpdate(int x1, int y1, int z1, int x2, int y2, int z2) {
@@ -430,25 +452,40 @@ public enum ProspectorXrayRenderer {
     private void rebuildDirtyGroups(Minecraft minecraft, World world) {
         minecraft.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
         Iterator<RenderGroup> iterator = renderGroups.values().iterator();
-        int rebuilt = 0;
         while (iterator.hasNext()) {
             RenderGroup group = iterator.next();
             if (group.isEmpty()) {
                 group.delete();
                 iterator.remove();
-                continue;
-            }
-            if (group.dirty && rebuilt++ < REBUILD_GROUPS_PER_FRAME) {
-                group.rebuild(minecraft, world);
             }
         }
+
+        int rebuilt = rebuildDirtyGroups(minecraft, world, true, 0);
+        if (rebuilt < REBUILD_GROUPS_PER_FRAME) {
+            rebuildDirtyGroups(minecraft, world, false, rebuilt);
+        }
+    }
+
+    private int rebuildDirtyGroups(Minecraft minecraft, World world, boolean urgentOnly, int rebuilt) {
+        for (RenderGroup group : renderGroups.values()) {
+            if (rebuilt >= REBUILD_GROUPS_PER_FRAME) {
+                return rebuilt;
+            }
+            if (!group.active || !group.dirty || urgentOnly != group.urgentDirty) {
+                continue;
+            }
+            group.rebuild(minecraft, world);
+            group.urgentDirty = false;
+            rebuilt++;
+        }
+        return rebuilt;
     }
 
     private void renderGroupLists(World world, double viewerX, double viewerY, double viewerZ, float partialTicks, Vec3d view, ICamera camera) {
         GlStateManager.depthMask(false);
         visibleGroups.clear();
         for (RenderGroup group : renderGroups.values()) {
-            if (!group.dirty && group.hasRenderableGeometry() && camera.isBoundingBoxInFrustum(group.bounds)) {
+            if (group.active && !group.dirty && group.hasRenderableGeometry() && camera.isBoundingBoxInFrustum(group.bounds)) {
                 group.updateDepth(viewerX, viewerY, viewerZ, view);
                 visibleGroups.add(group);
             }
@@ -985,6 +1022,22 @@ public enum ProspectorXrayRenderer {
         }
     }
 
+    private void markPositionUrgent(int x, int y, int z) {
+        RenderGroup group = renderGroups.get(groupKey(x, y, z));
+        if (group != null) {
+            group.dirty = true;
+            group.urgentDirty = true;
+        }
+        TrackedOre ore = oreBlocks.get(x, y, z);
+        if (ore != null) {
+            group = renderGroups.get(groupKey(ore.x, ore.y, ore.z));
+            if (group != null) {
+                group.dirty = true;
+                group.urgentDirty = true;
+            }
+        }
+    }
+
     private void removeEntry(TrackedOre entry) {
         removeFromRenderGroup(entry);
         markNeighborGroupsDirty(entry.x, entry.y, entry.z);
@@ -997,6 +1050,9 @@ public enum ProspectorXrayRenderer {
         }
         group.remove(entry);
         if (group.isEmpty()) {
+            if (group.active && activeRenderGroupCount > 0) {
+                activeRenderGroupCount--;
+            }
             group.delete();
             renderGroups.remove(group.key);
         }
@@ -1011,6 +1067,127 @@ public enum ProspectorXrayRenderer {
                 iterator.remove();
             }
         }
+    }
+
+    private void refreshActiveRenderGroups(double playerX, double playerZ, Vec3d view, int range) {
+        if (oreBlocks.isEmpty()) {
+            deactivateAllRenderGroups();
+            return;
+        }
+
+        double lookX = view.x;
+        double lookZ = view.z;
+        double lookLength = Math.sqrt(lookX * lookX + lookZ * lookZ);
+        if (lookLength < 1.0E-4D) {
+            lookX = lastActiveRenderLookX;
+            lookZ = lastActiveRenderLookZ;
+        } else {
+            lookX /= lookLength;
+            lookZ /= lookLength;
+        }
+
+        int centerX = Math.floorDiv((int) Math.floor(playerX), ACTIVE_RENDER_STEP_BLOCKS);
+        int centerZ = Math.floorDiv((int) Math.floor(playerZ), ACTIVE_RENDER_STEP_BLOCKS);
+        double lookDot = lookX * lastActiveRenderLookX + lookZ * lastActiveRenderLookZ;
+        if (activeRenderShapeValid
+                && centerX == lastActiveRenderX
+                && centerZ == lastActiveRenderZ
+                && range == lastActiveRenderRange
+                && lookDot >= ACTIVE_RENDER_LOOK_DOT) {
+            return;
+        }
+
+        lastActiveRenderX = centerX;
+        lastActiveRenderZ = centerZ;
+        lastActiveRenderRange = range;
+        lastActiveRenderPlayerX = playerX;
+        lastActiveRenderPlayerZ = playerZ;
+        lastActiveRenderLookX = lookX;
+        lastActiveRenderLookZ = lookZ;
+        activeRenderShapeValid = true;
+
+        long generation = ++activeRenderGeneration;
+        double radius = rangeBlocks(range);
+        double radiusSq = radius * radius;
+        for (TrackedOre ore : oreBlocks.values()) {
+            if (intersectsActiveRenderCone(ore.bounds, playerX, playerZ, lookX, lookZ, radiusSq)) {
+                RenderGroup group = renderGroups.get(groupKey(ore.x, ore.y, ore.z));
+                if (group != null) {
+                    group.activeGeneration = generation;
+                }
+            }
+        }
+
+        int activeCount = 0;
+        for (RenderGroup group : renderGroups.values()) {
+            if (group.setActive(group.activeGeneration == generation)) {
+                activeCount++;
+            }
+        }
+        activeRenderGroupCount = activeCount;
+    }
+
+    private void activateOreForCurrentShape(TrackedOre ore) {
+        if (!activeRenderShapeValid || lastActiveRenderRange <= 0) {
+            return;
+        }
+        double radius = rangeBlocks(lastActiveRenderRange);
+        if (!intersectsActiveRenderCone(ore.bounds, lastActiveRenderPlayerX, lastActiveRenderPlayerZ, lastActiveRenderLookX, lastActiveRenderLookZ, radius * radius)) {
+            return;
+        }
+        RenderGroup group = renderGroups.get(groupKey(ore.x, ore.y, ore.z));
+        if (group != null) {
+            group.activeGeneration = activeRenderGeneration;
+            if (!group.active) {
+                activeRenderGroupCount++;
+            }
+            group.setActive(true);
+        }
+    }
+
+    private void deactivateAllRenderGroups() {
+        for (RenderGroup group : renderGroups.values()) {
+            group.setActive(false);
+        }
+        activeRenderGroupCount = 0;
+        activeRenderShapeValid = false;
+    }
+
+    private static boolean intersectsActiveRenderCone(AxisAlignedBB box, double playerX, double playerZ, double lookX, double lookZ, double radiusSq) {
+        double closestX = clamp(playerX, box.minX, box.maxX);
+        double closestZ = clamp(playerZ, box.minZ, box.maxZ);
+        if (distanceSq2D(playerX, playerZ, closestX, closestZ) > radiusSq) {
+            return false;
+        }
+        return pointInActiveRenderCone(closestX, closestZ, playerX, playerZ, lookX, lookZ, radiusSq)
+                || pointInActiveRenderCone((box.minX + box.maxX) * 0.5D, (box.minZ + box.maxZ) * 0.5D, playerX, playerZ, lookX, lookZ, radiusSq)
+                || pointInActiveRenderCone(box.minX, box.minZ, playerX, playerZ, lookX, lookZ, radiusSq)
+                || pointInActiveRenderCone(box.minX, box.maxZ, playerX, playerZ, lookX, lookZ, radiusSq)
+                || pointInActiveRenderCone(box.maxX, box.minZ, playerX, playerZ, lookX, lookZ, radiusSq)
+                || pointInActiveRenderCone(box.maxX, box.maxZ, playerX, playerZ, lookX, lookZ, radiusSq);
+    }
+
+    private static boolean pointInActiveRenderCone(double x, double z, double playerX, double playerZ, double lookX, double lookZ, double radiusSq) {
+        double dx = x - playerX;
+        double dz = z - playerZ;
+        double distanceSq = dx * dx + dz * dz;
+        if (distanceSq > radiusSq) {
+            return false;
+        }
+        if (distanceSq <= ACTIVE_RENDER_NEAR_RADIUS_SQ) {
+            return true;
+        }
+        return (dx * lookX + dz * lookZ) / Math.sqrt(distanceSq) >= ACTIVE_RENDER_CONE_COS;
+    }
+
+    private static double distanceSq2D(double ax, double az, double bx, double bz) {
+        double dx = ax - bx;
+        double dz = az - bz;
+        return dx * dx + dz * dz;
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return value < min ? min : value > max ? max : value;
     }
 
     private void clearActiveState() {
@@ -1054,6 +1231,8 @@ public enum ProspectorXrayRenderer {
         }
         renderGroups.clear();
         visibleGroups.clear();
+        activeRenderGroupCount = 0;
+        activeRenderShapeValid = false;
         lastPrunedChunkX = Integer.MIN_VALUE;
         lastPrunedChunkZ = Integer.MIN_VALUE;
         lastPrunedRange = Integer.MIN_VALUE;
@@ -1392,7 +1571,10 @@ public enum ProspectorXrayRenderer {
         private double centerZ;
         private double depth;
         private int renderedCount;
+        private long activeGeneration;
+        private boolean active;
         private boolean depthResolvedOverlay;
+        private boolean urgentDirty;
         private boolean dirty = true;
 
         private RenderGroup(long key) {
@@ -1490,13 +1672,45 @@ public enum ProspectorXrayRenderer {
             return depthResolvedOverlay;
         }
 
+        private boolean setActive(boolean active) {
+            if (this.active == active) {
+                return active;
+            }
+            this.active = active;
+            if (active) {
+                dirty = true;
+            } else {
+                deleteBuffers();
+                renderedCount = 0;
+                depthResolvedOverlay = false;
+                urgentDirty = false;
+            }
+            return active;
+        }
+
         private boolean findDepthResolvedOverlay(Minecraft minecraft) {
             for (TrackedOre ore : ores) {
                 if (ore.pendingRemoval) {
                     continue;
                 }
+                if (hasTrackedNeighbor(ore)) {
+                    return true;
+                }
                 IBakedModel model = minecraft.getBlockRendererDispatcher().getModelForState(ore.state);
                 if (ProspectorXrayRenderer.this.requiresDepthResolvedOverlay(ore.state, model, ore.pos)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private boolean hasTrackedNeighbor(TrackedOre ore) {
+            for (EnumFacing facing : EnumFacing.values()) {
+                TrackedOre neighbor = oreBlocks.get(
+                        ore.x + facing.getXOffset(),
+                        ore.y + facing.getYOffset(),
+                        ore.z + facing.getZOffset());
+                if (neighbor != null && !neighbor.pendingRemoval) {
                     return true;
                 }
             }
