@@ -32,6 +32,7 @@ public class GuiProspector extends GuiScreen {
     private static final int BUTTON_CLEAR = 1;
     private static final int BUTTON_RANGE_DOWN = 2;
     private static final int BUTTON_RANGE_UP = 3;
+    private static final int REMOVE_BUTTON_SIZE = 9;
 
     private final ItemStack stack;
     private final EnumHand hand;
@@ -151,11 +152,20 @@ public class GuiProspector extends GuiScreen {
             }
         }
 
-        if (mouseButton == 0 && isMouseOver(selectedListX, selectedListY, selectedListW, selectedListH, mouseX, mouseY)
-                && overScrollbar(mouseX, selectedListX, selectedListW, selectedListH, selectedTargets.size())) {
-            draggingSelectedScrollbar = true;
-            selectedScrollOffset = updateScrollFromMouse(mouseY, selectedListY, selectedListH, selectedTargets.size());
-            return;
+        if (mouseButton == 0 && isMouseOver(selectedListX, selectedListY, selectedListW, selectedListH, mouseX, mouseY)) {
+            String selected = selectedTargetAt(mouseY);
+            int rowY = selectedRowY(mouseY);
+            if (selected != null && isMouseOver(removeButtonX(), removeButtonY(rowY), REMOVE_BUTTON_SIZE, REMOVE_BUTTON_SIZE, mouseX, mouseY)) {
+                selectedTargets.remove(selected);
+                clampSelectedScroll();
+                syncSettings();
+                return;
+            }
+            if (overScrollbar(mouseX, selectedListX, selectedListW, selectedListH, selectedTargets.size())) {
+                draggingSelectedScrollbar = true;
+                selectedScrollOffset = updateScrollFromMouse(mouseY, selectedListY, selectedListH, selectedTargets.size());
+                return;
+            }
         }
 
         super.mouseClicked(mouseX, mouseY, mouseButton);
@@ -279,7 +289,7 @@ public class GuiProspector extends GuiScreen {
             if (i >= rows) {
                 break;
             }
-            drawSelectedOre(ore, selectedListY + i * ROW_HEIGHT);
+            drawSelectedOre(ore, selectedListY + i * ROW_HEIGHT, mouseX, mouseY);
             i++;
         }
         drawScrollbar(selectedListX, selectedListY, selectedListW, selectedListH, selectedTargets.size(), selectedScrollOffset);
@@ -297,12 +307,27 @@ public class GuiProspector extends GuiScreen {
         drawRect(barX, barY + 8, barX + barW, barY + 9, 0x60333333);
     }
 
-    private void drawSelectedOre(String ore, int y) {
+    private void drawSelectedOre(String ore, int y, int mouseX, int mouseY) {
         drawRect(panelX + 6, y, panelX + panelW - 6, y + ROW_HEIGHT, 0x20FFFFFF);
         drawTargetIcon(ore, panelX + 10, y + 3);
-        int textW = panelW - 40;
+        int textW = panelW - 56;
         fontRenderer.drawString(trimWithDots(localizedName(ore), textW), panelX + 30, y + 3, 0xFFFFA0);
         fontRenderer.drawString(trimWithDots(targetLabel(ore), textW), panelX + 30, y + 13, 0x888888);
+        drawRemoveButton(removeButtonX(), removeButtonY(y), isMouseOver(removeButtonX(), removeButtonY(y), REMOVE_BUTTON_SIZE, REMOVE_BUTTON_SIZE, mouseX, mouseY));
+    }
+
+    private void drawRemoveButton(int x, int y, boolean hovered) {
+        drawRect(x - 1, y - 1, x + REMOVE_BUTTON_SIZE + 1, y + REMOVE_BUTTON_SIZE + 1, hovered ? 0xFFFF6058 : 0xFFC83232);
+        drawRect(x, y, x + REMOVE_BUTTON_SIZE, y + REMOVE_BUTTON_SIZE, hovered ? 0xFF8F1F1F : 0xFF5C1818);
+        drawRect(x + 2, y + 2, x + 3, y + 3, 0xFFFFDDDD);
+        drawRect(x + 3, y + 3, x + 4, y + 4, 0xFFFFDDDD);
+        drawRect(x + 4, y + 4, x + 5, y + 5, 0xFFFFDDDD);
+        drawRect(x + 5, y + 5, x + 6, y + 6, 0xFFFFDDDD);
+        drawRect(x + 6, y + 6, x + 7, y + 7, 0xFFFFDDDD);
+        drawRect(x + 6, y + 2, x + 7, y + 3, 0xFFFFDDDD);
+        drawRect(x + 5, y + 3, x + 6, y + 4, 0xFFFFDDDD);
+        drawRect(x + 3, y + 5, x + 4, y + 6, 0xFFFFDDDD);
+        drawRect(x + 2, y + 6, x + 3, y + 7, 0xFFFFDDDD);
     }
 
     private void drawTargetIcon(String target, int x, int y) {
@@ -416,6 +441,36 @@ public class GuiProspector extends GuiScreen {
         int visibleRows = Math.max(1, selectedListH / ROW_HEIGHT);
         int max = Math.max(0, selectedTargets.size() - visibleRows);
         selectedScrollOffset = Math.max(0, Math.min(max, selectedScrollOffset));
+    }
+
+    private String selectedTargetAt(int mouseY) {
+        int row = (mouseY - selectedListY) / ROW_HEIGHT;
+        if (row < 0 || row >= selectedListH / ROW_HEIGHT) {
+            return null;
+        }
+        int index = selectedScrollOffset + row;
+        if (index >= selectedTargets.size()) {
+            return null;
+        }
+        int i = 0;
+        for (String target : selectedTargets) {
+            if (i++ == index) {
+                return target;
+            }
+        }
+        return null;
+    }
+
+    private int selectedRowY(int mouseY) {
+        return selectedListY + (mouseY - selectedListY) / ROW_HEIGHT * ROW_HEIGHT;
+    }
+
+    private int removeButtonX() {
+        return selectedListX + selectedListW - 18;
+    }
+
+    private int removeButtonY(int rowY) {
+        return rowY + 6;
     }
 
     private void toggleOre(String ore) {
