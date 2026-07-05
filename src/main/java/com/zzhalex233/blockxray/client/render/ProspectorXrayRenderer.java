@@ -309,7 +309,7 @@ public enum ProspectorXrayRenderer {
     }
 
     private boolean addOrUpdateOre(int x, int y, int z, IBlockState state) {
-        Set<String> oreNames = oreMatcher.matchingNames(state);
+        Set<String> oreNames = oreMatcher.matchingNames(state, ProspectorMatcher.UNKNOWN_META);
         return addOrUpdateOre(x, y, z, state, oreNames);
     }
 
@@ -333,22 +333,44 @@ public enum ProspectorXrayRenderer {
 
     private boolean addOrUpdateVisibleOre(World world, int x, int y, int z) {
         BlockPos pos = new BlockPos(x, y, z);
-        if (!world.isBlockLoaded(pos, false) || !hasVisibleMatchedFace(world, pos)) {
+        if (!world.isBlockLoaded(pos, false)) {
             return removeOre(x, y, z);
         }
-        return addOrUpdateOre(x, y, z, world.getBlockState(pos));
+        IBlockState state = world.getBlockState(pos);
+        Set<String> oreNames = matchingNames(world, pos, state);
+        if (oreNames.isEmpty() || !hasVisibleMatchedFace(world, pos, state)) {
+            return removeOre(x, y, z);
+        }
+        return addOrUpdateOre(x, y, z, state, oreNames);
     }
 
     private boolean hasVisibleMatchedFace(World world, BlockPos pos) {
-        if (!oreMatcher.matches(world.getBlockState(pos))) {
+        return hasVisibleMatchedFace(world, pos, world.getBlockState(pos));
+    }
+
+    private boolean hasVisibleMatchedFace(World world, BlockPos pos, IBlockState state) {
+        if (!matches(world, pos, state)) {
             return false;
         }
         for (EnumFacing face : EnumFacing.values()) {
-            if (!oreMatcher.matches(world.getBlockState(pos.offset(face)))) {
+            BlockPos neighbor = pos.offset(face);
+            if (!matches(world, neighbor, world.getBlockState(neighbor))) {
                 return true;
             }
         }
         return false;
+    }
+
+    private boolean matches(World world, BlockPos pos, IBlockState state) {
+        return oreMatcher.matches(state, matcherMeta(world, pos, state));
+    }
+
+    private Set<String> matchingNames(World world, BlockPos pos, IBlockState state) {
+        return oreMatcher.matchingNames(state, matcherMeta(world, pos, state));
+    }
+
+    private int matcherMeta(World world, BlockPos pos, IBlockState state) {
+        return oreMatcher.requiresWorldMeta(state) ? BlockTargets.scanMeta(world, pos, state) : ProspectorMatcher.UNKNOWN_META;
     }
 
     private boolean addNewOre(TrackedOre ore) {
@@ -645,8 +667,8 @@ public enum ProspectorXrayRenderer {
         int rendered = 0;
         for (TrackedOre ore : ores) {
             IBlockState current = world.getBlockState(ore.pos);
-            Set<String> oreNames = oreMatcher.matchingNames(current);
-            if (oreNames.isEmpty() || !hasVisibleMatchedFace(world, ore.pos)) {
+            Set<String> oreNames = matchingNames(world, ore.pos, current);
+            if (oreNames.isEmpty() || !hasVisibleMatchedFace(world, ore.pos, current)) {
                 ore.pendingRemoval = true;
                 continue;
             }
@@ -1331,7 +1353,7 @@ public enum ProspectorXrayRenderer {
             while (sectionIndex < sections.size()
                     && submitted < SNAPSHOT_SECTIONS_PER_FRAME
                     && pendingTasks.get() < MAX_PENDING_SECTION_TASKS) {
-                SectionSnapshot snapshot = sections.get(sectionIndex++).snapshot(world, center, blockRadius, generation);
+                SectionSnapshot snapshot = sections.get(sectionIndex++).snapshot(world, center, blockRadius, generation, matcher);
                 pendingTasks.incrementAndGet();
                 scanExecutor.execute(() -> {
                     try {
@@ -1389,8 +1411,9 @@ public enum ProspectorXrayRenderer {
             this.distanceSq = distanceSq;
         }
 
-        private SectionSnapshot snapshot(World world, BlockPos center, int blockRadius, int generation) {
+        private SectionSnapshot snapshot(World world, BlockPos center, int blockRadius, int generation, ProspectorMatcher matcher) {
             IBlockState[] states = new IBlockState[SNAPSHOT_WIDTH * SNAPSHOT_WIDTH * SNAPSHOT_WIDTH];
+            int[] metas = new int[states.length];
             IBlockState air = Blocks.AIR.getDefaultState();
             BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
             int height = world.getHeight();
@@ -1407,11 +1430,13 @@ public enum ProspectorXrayRenderer {
                                 state = world.getBlockState(pos);
                             }
                         }
-                        states[snapshotIndex(x, y, z)] = state;
+                        int index = snapshotIndex(x, y, z);
+                        states[index] = state;
+                        metas[index] = matcher.requiresWorldMeta(state) ? BlockTargets.scanMeta(world, pos, state) : ProspectorMatcher.UNKNOWN_META;
                     }
                 }
             }
-            return new SectionSnapshot(baseX, baseY, baseZ, center, blockRadius, generation, states);
+            return new SectionSnapshot(baseX, baseY, baseZ, center, blockRadius, generation, states, metas);
         }
     }
 
@@ -1423,8 +1448,9 @@ public enum ProspectorXrayRenderer {
         private final int blockRadius;
         private final int generation;
         private final IBlockState[] states;
+        private final int[] metas;
 
-        private SectionSnapshot(int baseX, int baseY, int baseZ, BlockPos center, int blockRadius, int generation, IBlockState[] states) {
+        private SectionSnapshot(int baseX, int baseY, int baseZ, BlockPos center, int blockRadius, int generation, IBlockState[] states, int[] metas) {
             this.baseX = baseX;
             this.baseY = baseY;
             this.baseZ = baseZ;
@@ -1432,6 +1458,7 @@ public enum ProspectorXrayRenderer {
             this.blockRadius = blockRadius;
             this.generation = generation;
             this.states = states;
+            this.metas = metas;
         }
 
         private ScanBatch scan(ProspectorMatcher matcher) {
@@ -1447,8 +1474,9 @@ public enum ProspectorXrayRenderer {
                         }
 
                         IBlockState state = state(x, y, z);
-                        if (matcher.matches(state) && hasVisibleFace(matcher, x, y, z)) {
-                            Set<String> names = matcher.matchingNames(state);
+                        int meta = meta(x, y, z);
+                        if (matcher.matches(state, meta) && hasVisibleFace(matcher, x, y, z)) {
+                            Set<String> names = matcher.matchingNames(state, meta);
                             if (!names.isEmpty()) {
                                 results.add(new ScanResult(worldX, worldY, worldZ));
                             }
@@ -1460,16 +1488,20 @@ public enum ProspectorXrayRenderer {
         }
 
         private boolean hasVisibleFace(ProspectorMatcher matcher, int x, int y, int z) {
-            return !matcher.matches(state(x - 1, y, z))
-                    || !matcher.matches(state(x + 1, y, z))
-                    || !matcher.matches(state(x, y - 1, z))
-                    || !matcher.matches(state(x, y + 1, z))
-                    || !matcher.matches(state(x, y, z - 1))
-                    || !matcher.matches(state(x, y, z + 1));
+            return !matcher.matches(state(x - 1, y, z), meta(x - 1, y, z))
+                    || !matcher.matches(state(x + 1, y, z), meta(x + 1, y, z))
+                    || !matcher.matches(state(x, y - 1, z), meta(x, y - 1, z))
+                    || !matcher.matches(state(x, y + 1, z), meta(x, y + 1, z))
+                    || !matcher.matches(state(x, y, z - 1), meta(x, y, z - 1))
+                    || !matcher.matches(state(x, y, z + 1), meta(x, y, z + 1));
         }
 
         private IBlockState state(int x, int y, int z) {
             return states[snapshotIndex(x, y, z)];
+        }
+
+        private int meta(int x, int y, int z) {
+            return metas[snapshotIndex(x, y, z)];
         }
     }
 

@@ -21,11 +21,17 @@ import java.util.Set;
 public final class OreDictionaryBlocks {
     private static final String TARGET_SEPARATOR = "|";
     private static final String META_SEPARATOR = "@";
+    private static List<String> cachedOreNames;
+    private static Map<String, ItemStack> cachedOreIcons;
 
     private OreDictionaryBlocks() {
     }
 
     public static List<String> oreNames() {
+        if (cachedOreNames != null) {
+            return cachedOreNames;
+        }
+
         Set<String> names = new LinkedHashSet<>();
         for (String name : OreDictionary.getOreNames()) {
             if (name.startsWith("ore") && containsBlock(name)) {
@@ -39,7 +45,8 @@ public final class OreDictionaryBlocks {
         }
         List<String> sorted = new ArrayList<>(names);
         sorted.sort(String::compareToIgnoreCase);
-        return sorted;
+        cachedOreNames = Collections.unmodifiableList(sorted);
+        return cachedOreNames;
     }
 
     public static boolean matchesAny(IBlockState state, Set<String> selectedOres) {
@@ -286,6 +293,10 @@ public final class OreDictionaryBlocks {
     }
 
     public static Map<String, ItemStack> oreIcons() {
+        if (cachedOreIcons != null) {
+            return cachedOreIcons;
+        }
+
         Map<String, ItemStack> icons = new LinkedHashMap<>();
         for (String name : oreNames()) {
             Target target = parseTarget(name);
@@ -298,7 +309,8 @@ public final class OreDictionaryBlocks {
                 }
             }
         }
-        return icons;
+        cachedOreIcons = Collections.unmodifiableMap(icons);
+        return cachedOreIcons;
     }
 
     private static String targetId(String oreName, ItemStack stack) {

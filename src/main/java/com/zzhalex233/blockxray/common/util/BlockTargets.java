@@ -1,15 +1,23 @@
 package com.zzhalex233.blockxray.common.util;
 
 import net.minecraft.block.Block;
+import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.init.Blocks;
 import net.minecraft.init.Items;
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.util.NonNullList;
 import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.RayTraceResult;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.World;
 import net.minecraftforge.fml.common.registry.ForgeRegistries;
+import net.minecraftforge.fluids.FluidRegistry;
+import net.minecraftforge.oredict.OreDictionary;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -22,32 +30,35 @@ import java.util.Set;
 
 public final class BlockTargets {
     private static final String META_SEPARATOR = "@";
+    private static final Map<Block, Boolean> EXTERNAL_META_BLOCKS = new HashMap<>();
+    private static Map<String, ItemStack> cachedVisibleTargetIcons;
+    private static Map<String, ItemStack> cachedIcons;
+    private static List<String> cachedNames;
 
     private BlockTargets() {
     }
 
     public static List<String> names() {
-        Set<String> names = new LinkedHashSet<>();
-        for (Block block : ForgeRegistries.BLOCKS) {
-            names.addAll(targetIds(block));
+        if (cachedNames == null) {
+            List<String> sorted = new ArrayList<>(visibleTargetIcons().keySet());
+            sorted.sort(String::compareToIgnoreCase);
+            cachedNames = Collections.unmodifiableList(sorted);
         }
-        List<String> sorted = new ArrayList<>(names);
-        sorted.sort(String::compareToIgnoreCase);
-        return sorted;
+        return cachedNames;
     }
 
     public static Map<String, ItemStack> icons() {
-        Map<String, ItemStack> icons = new LinkedHashMap<>();
-        for (String name : names()) {
-            Target target = parseTarget(name);
-            if (target != null) {
-                ItemStack stack = iconStack(target);
-                if (!stack.isEmpty()) {
-                    icons.put(name, stack);
+        if (cachedIcons == null) {
+            Map<String, ItemStack> icons = new LinkedHashMap<>();
+            for (Map.Entry<String, ItemStack> entry : visibleTargetIcons().entrySet()) {
+                ItemStack stack = entry.getValue();
+                if (stack != null && !stack.isEmpty()) {
+                    icons.put(entry.getKey(), stack);
                 }
             }
+            cachedIcons = Collections.unmodifiableMap(icons);
         }
-        return icons;
+        return cachedIcons;
     }
 
     public static String displayName(String name) {
@@ -104,6 +115,13 @@ public final class BlockTargets {
         return expandTarget(targetId(state.getBlock(), targetMeta(state)));
     }
 
+    public static Set<String> targetsForBlock(World world, BlockPos pos, IBlockState state) {
+        if (state == null) {
+            return Collections.emptySet();
+        }
+        return expandTarget(targetId(state.getBlock(), scanMeta(world, pos, state)));
+    }
+
     public static Set<String> expandTarget(String name) {
         Set<String> targets = new LinkedHashSet<>();
         Target target = parseTarget(name);
@@ -143,6 +161,143 @@ public final class BlockTargets {
         }
         Block block = blockByName(name);
         return block == null || block == Blocks.AIR ? null : block.getDefaultState();
+    }
+
+    private static Map<String, ItemStack> visibleTargetIcons() {
+        if (cachedVisibleTargetIcons != null) {
+            return cachedVisibleTargetIcons;
+        }
+
+        Map<Block, Map<Integer, ItemStack>> stacksByBlock = new LinkedHashMap<>();
+        NonNullList<ItemStack> stacks = NonNullList.create();
+        for (CreativeTabs tab : CreativeTabs.CREATIVE_TAB_ARRAY) {
+            if (tab == CreativeTabs.HOTBAR) {
+                continue;
+            }
+            try {
+                tab.displayAllRelevantItems(stacks);
+            } catch (RuntimeException | LinkageError ignored) {
+                stacks.clear();
+            }
+            for (ItemStack stack : stacks) {
+                addVisibleStack(stacksByBlock, stack);
+            }
+            stacks.clear();
+        }
+
+        for (Block block : ForgeRegistries.BLOCKS) {
+            addVisibleBlockStacks(stacksByBlock, block);
+        }
+        for (Item item : ForgeRegistries.ITEMS) {
+            addVisibleItemStacks(stacksByBlock, item);
+        }
+
+        Map<String, ItemStack> targets = new LinkedHashMap<>();
+        for (Map.Entry<Block, Map<Integer, ItemStack>> entry : stacksByBlock.entrySet()) {
+            ResourceLocation name = entry.getKey().getRegistryName();
+            if (name == null) {
+                continue;
+            }
+            boolean single = entry.getValue().size() <= 1;
+            for (Map.Entry<Integer, ItemStack> stackEntry : entry.getValue().entrySet()) {
+                targets.put(targetId(name, stackEntry.getKey(), single), stackEntry.getValue().copy());
+            }
+        }
+        addVisibleFluidTargets(targets);
+        cachedVisibleTargetIcons = Collections.unmodifiableMap(targets);
+        return cachedVisibleTargetIcons;
+    }
+
+    private static void addVisibleFluidTargets(Map<String, ItemStack> targets) {
+        for (Block block : ForgeRegistries.BLOCKS) {
+            if (isFluidBlock(block)) {
+                for (String target : targetIds(block)) {
+                    targets.putIfAbsent(target, ItemStack.EMPTY);
+                }
+            }
+        }
+    }
+
+    private static void addVisibleBlockStacks(Map<Block, Map<Integer, ItemStack>> stacksByBlock, Block block) {
+        if (block == null || block == Blocks.AIR) {
+            return;
+        }
+        Item item = Item.getItemFromBlock(block);
+        if (item == null || item == Items.AIR) {
+            return;
+        }
+
+        NonNullList<ItemStack> stacks = NonNullList.create();
+        for (CreativeTabs tab : item.getCreativeTabs()) {
+            try {
+                block.getSubBlocks(tab, stacks);
+            } catch (RuntimeException | LinkageError ignored) {
+                stacks.clear();
+            }
+            for (ItemStack stack : stacks) {
+                addVisibleStack(stacksByBlock, stack);
+            }
+            stacks.clear();
+        }
+    }
+
+    private static void addVisibleItemStacks(Map<Block, Map<Integer, ItemStack>> stacksByBlock, Item item) {
+        if (item == null || item == Items.AIR) {
+            return;
+        }
+
+        NonNullList<ItemStack> stacks = NonNullList.create();
+        for (CreativeTabs tab : item.getCreativeTabs()) {
+            try {
+                item.getSubItems(tab, stacks);
+            } catch (RuntimeException | LinkageError ignored) {
+                stacks.clear();
+            }
+            for (ItemStack stack : stacks) {
+                addVisibleStack(stacksByBlock, stack);
+            }
+            stacks.clear();
+        }
+    }
+
+    private static void addVisibleStack(Map<Block, Map<Integer, ItemStack>> stacksByBlock, ItemStack stack) {
+        if (stack == null || stack.isEmpty() || stack.getMetadata() == OreDictionary.WILDCARD_VALUE) {
+            return;
+        }
+
+        Block block = Block.getBlockFromItem(stack.getItem());
+        int meta = stack.getMetadata();
+        if (block == Blocks.AIR) {
+            block = sameNameBlock(stack);
+        }
+        if (block == Blocks.AIR) {
+            return;
+        }
+        stacksByBlock.computeIfAbsent(block, ignored -> new LinkedHashMap<>()).putIfAbsent(meta, stack.copy());
+    }
+
+    private static Block sameNameBlock(ItemStack stack) {
+        ResourceLocation itemName = stack.getItem().getRegistryName();
+        if (itemName == null) {
+            return Blocks.AIR;
+        }
+        Block namedBlock = ForgeRegistries.BLOCKS.getValue(itemName);
+        return namedBlock == null ? Blocks.AIR : namedBlock;
+    }
+
+    private static boolean isFluidBlock(Block block) {
+        if (block == null || block == Blocks.AIR) {
+            return false;
+        }
+        if (FluidRegistry.lookupFluidForBlock(block) != null) {
+            return true;
+        }
+        try {
+            Material material = block.getDefaultState().getMaterial();
+            return material == Material.WATER || material == Material.LAVA;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
     }
 
     private static Set<String> targetIds(Block block) {
@@ -285,6 +440,61 @@ public final class BlockTargets {
         }
     }
 
+    public static int stateMeta(IBlockState state) {
+        return state == null ? 0 : targetMeta(state);
+    }
+
+    public static int scanMeta(World world, BlockPos pos, IBlockState state) {
+        int meta = stateMeta(state);
+        if (world == null || pos == null || state == null || !requiresExternalMeta(state.getBlock())) {
+            return meta;
+        }
+
+        ItemStack stack = pickStack(world, pos, state);
+        if (stack.isEmpty()) {
+            return meta;
+        }
+
+        Block stackBlock = Block.getBlockFromItem(stack.getItem());
+        if (stackBlock == Blocks.AIR) {
+            stackBlock = sameNameBlock(stack);
+        }
+        return stackBlock == state.getBlock() ? stack.getMetadata() : meta;
+    }
+
+    private static ItemStack pickStack(World world, BlockPos pos, IBlockState state) {
+        try {
+            RayTraceResult hit = new RayTraceResult(new Vec3d(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D), EnumFacing.UP, pos);
+            ItemStack stack = state.getBlock().getPickBlock(state, hit, world, pos, null);
+            return stack == null ? ItemStack.EMPTY : stack;
+        } catch (RuntimeException | LinkageError ignored) {
+            return ItemStack.EMPTY;
+        }
+    }
+
+    private static boolean requiresExternalMeta(Block block) {
+        Boolean cached = EXTERNAL_META_BLOCKS.get(block);
+        if (cached == null) {
+            cached = itemMetas(block).size() > stateMetas(block).size();
+            EXTERNAL_META_BLOCKS.put(block, cached);
+        }
+        return cached;
+    }
+
+    private static Set<Integer> stateMetas(Block block) {
+        Set<Integer> metas = new LinkedHashSet<>();
+        if (block == null || block == Blocks.AIR) {
+            return metas;
+        }
+        for (IBlockState state : block.getBlockState().getValidStates()) {
+            metas.add(targetMeta(state));
+        }
+        if (metas.isEmpty()) {
+            metas.add(0);
+        }
+        return metas;
+    }
+
     private static Block blockByName(String name) {
         try {
             return ForgeRegistries.BLOCKS.getValue(new ResourceLocation(name));
@@ -324,6 +534,37 @@ public final class BlockTargets {
             MetaMatcher matcher = blocks.get(state.getBlock());
             return matcher == null ? Collections.emptySet() : matcher.matchingNames(targetMeta(state));
         }
+
+        @Override
+        public boolean requiresWorldMeta(IBlockState state) {
+            if (state == null) {
+                return false;
+            }
+            MetaMatcher matcher = blocks.get(state.getBlock());
+            return matcher != null && matcher.hasSpecificMetas() && requiresExternalMeta(state.getBlock());
+        }
+
+        @Override
+        public boolean matches(IBlockState state, int meta) {
+            if (state == null) {
+                return false;
+            }
+            MetaMatcher matcher = blocks.get(state.getBlock());
+            return matcher != null && matcher.matches(resolvedMeta(state, meta));
+        }
+
+        @Override
+        public Set<String> matchingNames(IBlockState state, int meta) {
+            if (state == null) {
+                return Collections.emptySet();
+            }
+            MetaMatcher matcher = blocks.get(state.getBlock());
+            return matcher == null ? Collections.emptySet() : matcher.matchingNames(resolvedMeta(state, meta));
+        }
+
+        private int resolvedMeta(IBlockState state, int meta) {
+            return meta == ProspectorMatcher.UNKNOWN_META ? targetMeta(state) : meta;
+        }
     }
 
     private static final class MetaMatcher {
@@ -340,6 +581,10 @@ public final class BlockTargets {
 
         private boolean matches(int meta) {
             return !allNames.isEmpty() || namesByMeta.containsKey(meta);
+        }
+
+        private boolean hasSpecificMetas() {
+            return !namesByMeta.isEmpty();
         }
 
         private Set<String> matchingNames(int meta) {

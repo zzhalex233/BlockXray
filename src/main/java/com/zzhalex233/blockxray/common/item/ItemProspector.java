@@ -61,7 +61,7 @@ public class ItemProspector extends Item {
             return EnumActionResult.PASS;
         }
 
-        Set<String> targets = targetsForState(world.getBlockState(pos));
+        Set<String> targets = targetsForBlock(world, pos, world.getBlockState(pos));
         if (targets.isEmpty()) {
             return EnumActionResult.FAIL;
         }
@@ -138,7 +138,7 @@ public class ItemProspector extends Item {
         return OreDictionaryBlocks.expandTarget(target);
     }
 
-    private Set<String> targetsForState(IBlockState state) {
-        return blockProspector ? BlockTargets.targetsForState(state) : OreDictionaryBlocks.targetsForState(state);
+    private Set<String> targetsForBlock(World world, BlockPos pos, IBlockState state) {
+        return blockProspector ? BlockTargets.targetsForBlock(world, pos, state) : OreDictionaryBlocks.targetsForState(state);
     }
 }

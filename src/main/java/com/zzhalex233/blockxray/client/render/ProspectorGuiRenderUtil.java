@@ -46,21 +46,25 @@ public final class ProspectorGuiRenderUtil {
 
     public static void drawBlockTargetIcon(Minecraft minecraft, RenderItem itemRender, ItemStack itemIcon,
                                            IBlockState state, int x, int y, int size) {
-        if (state != null && drawFluidIcon(minecraft, state, x, y, size)) {
-            return;
-        }
-        if (state != null && shouldUseNativeBlockModelIcon(minecraft, itemRender, itemIcon, state)
-                && drawNativeBlockModelIcon(minecraft, itemRender, state, x, y)) {
-            return;
-        }
-        if (state != null && shouldUseWorldIcon(minecraft, itemRender, itemIcon, state) && drawWorldIcon(minecraft, state, x, y, size)) {
-            return;
-        }
-        if (itemIcon != null && !itemIcon.isEmpty() && !hasMissingItemModel(minecraft, itemRender, itemIcon) && drawItemIcon(itemRender, itemIcon, x, y)) {
-            return;
-        }
-        if (state != null && state.getRenderType() != EnumBlockRenderType.INVISIBLE) {
-            drawWorldIcon(minecraft, state, x, y, size);
+        try {
+            if (state != null && drawFluidIcon(minecraft, state, x, y, size)) {
+                return;
+            }
+            if (itemIcon != null && !itemIcon.isEmpty() && drawItemIcon(itemRender, itemIcon, x, y)) {
+                return;
+            }
+            if (state != null && shouldUseNativeBlockModelIcon(minecraft, itemRender, itemIcon, state)
+                    && drawNativeBlockModelIcon(minecraft, itemRender, state, x, y)) {
+                return;
+            }
+            if (state != null && shouldUseWorldIcon(minecraft, itemRender, itemIcon, state) && drawWorldIcon(minecraft, state, x, y, size)) {
+                return;
+            }
+            if (state != null && state.getRenderType() != EnumBlockRenderType.INVISIBLE) {
+                drawWorldIcon(minecraft, state, x, y, size);
+            }
+        } finally {
+            finishDanglingTessellatorBuffer();
         }
     }
 
@@ -72,6 +76,7 @@ public final class ProspectorGuiRenderUtil {
             itemRender.renderItemAndEffectIntoGUI(icon, x, y);
             return true;
         } catch (RuntimeException ignored) {
+            finishDanglingTessellatorBuffer();
             return false;
         } finally {
             RenderHelper.disableStandardItemLighting();
@@ -97,10 +102,13 @@ public final class ProspectorGuiRenderUtil {
 
     private static boolean shouldUseNativeBlockModelIcon(Minecraft minecraft, RenderItem itemRender, ItemStack itemIcon, IBlockState state) {
         boolean missingItem = itemIcon == null || itemIcon.isEmpty() || hasMissingItemModel(minecraft, itemRender, itemIcon);
+        boolean flatFullBlockItem = !missingItem && (isFlatItemModel(minecraft, itemRender, itemIcon)
+                || isThinItemModel(minecraft, itemRender, itemIcon)
+                || usesGeneratedItemTexture(minecraft, itemRender, itemIcon));
         return state.getRenderType() == EnumBlockRenderType.MODEL
                 && !isMultipartState(state)
-                && missingItem
-                && hasFullBlockBounds(minecraft, state);
+                && hasFullBlockBounds(minecraft, state)
+                && (missingItem || flatFullBlockItem);
     }
 
     private static boolean drawFluidIcon(Minecraft minecraft, IBlockState state, int x, int y, int size) {
@@ -154,6 +162,7 @@ public final class ProspectorGuiRenderUtil {
             tessellator.draw();
             return true;
         } catch (RuntimeException ignored) {
+            finishDanglingTessellatorBuffer();
             return false;
         } finally {
             GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
@@ -213,6 +222,7 @@ public final class ProspectorGuiRenderUtil {
             renderNativeBlockModelQuads(itemRender, model, state);
             return true;
         } catch (RuntimeException ignored) {
+            finishDanglingTessellatorBuffer();
             return false;
         } finally {
             GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
@@ -270,6 +280,7 @@ public final class ProspectorGuiRenderUtil {
             scene.render(minecraft, view.topDownLight);
             return true;
         } catch (RuntimeException ignored) {
+            finishDanglingTessellatorBuffer();
             return false;
         } finally {
             restoreWorldIconState();
@@ -324,6 +335,17 @@ public final class ProspectorGuiRenderUtil {
         IBakedModel model = minecraft.getBlockRendererDispatcher().getModelForState(state);
         minecraft.getBlockRendererDispatcher().getBlockModelRenderer()
                 .renderModelBrightnessColor(state, model, 1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    private static void finishDanglingTessellatorBuffer() {
+        BufferBuilder buffer = Tessellator.getInstance().getBuffer();
+        if (!buffer.isDrawing) {
+            return;
+        }
+        try {
+            buffer.finishDrawing();
+        } catch (RuntimeException ignored) {
+        }
     }
 
     private static TileEntity createTileEntity(Minecraft minecraft, IBlockState state) {

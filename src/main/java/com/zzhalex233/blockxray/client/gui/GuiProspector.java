@@ -19,6 +19,7 @@ import org.lwjgl.input.Mouse;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -33,6 +34,14 @@ public class GuiProspector extends GuiScreen {
     private static final int BUTTON_RANGE_DOWN = 2;
     private static final int BUTTON_RANGE_UP = 3;
     private static final int REMOVE_BUTTON_SIZE = 9;
+    private static String cachedOreSearchText = "";
+    private static String cachedBlockSearchText = "";
+    private static final Map<String, String> CACHED_BLOCK_DISPLAY_NAMES = new HashMap<>();
+    private static final Map<String, String> CACHED_BLOCK_LABELS = new HashMap<>();
+    private static final Map<String, String> CACHED_BLOCK_SEARCH_TEXT = new HashMap<>();
+    private static final Map<String, String> CACHED_ORE_DISPLAY_NAMES = new HashMap<>();
+    private static final Map<String, String> CACHED_ORE_LABELS = new HashMap<>();
+    private static final Map<String, String> CACHED_ORE_SEARCH_TEXT = new HashMap<>();
 
     private final ItemStack stack;
     private final EnumHand hand;
@@ -40,6 +49,10 @@ public class GuiProspector extends GuiScreen {
     private final List<String> targets;
     private final Map<String, ItemStack> icons;
     private final Set<String> selectedTargets = new LinkedHashSet<>();
+    private final Map<String, String> displayNames;
+    private final Map<String, String> targetLabels;
+    private final Map<String, String> searchableText;
+    private final Map<String, IBlockState> targetStates = new HashMap<>();
 
     private GuiTextField searchField;
     private int range;
@@ -60,6 +73,8 @@ public class GuiProspector extends GuiScreen {
     private int panelH;
     private boolean draggingScrollbar;
     private boolean draggingSelectedScrollbar;
+    private String cachedFilter = null;
+    private List<String> cachedFilteredTargets = new ArrayList<>();
 
     public GuiProspector(ItemStack stack, EnumHand hand) {
         this.stack = stack;
@@ -67,6 +82,9 @@ public class GuiProspector extends GuiScreen {
         this.prospector = (ItemProspector) stack.getItem();
         this.targets = prospector.isBlockProspector() ? BlockTargets.names() : OreDictionaryBlocks.oreNames();
         this.icons = prospector.isBlockProspector() ? BlockTargets.icons() : OreDictionaryBlocks.oreIcons();
+        this.displayNames = prospector.isBlockProspector() ? CACHED_BLOCK_DISPLAY_NAMES : CACHED_ORE_DISPLAY_NAMES;
+        this.targetLabels = prospector.isBlockProspector() ? CACHED_BLOCK_LABELS : CACHED_ORE_LABELS;
+        this.searchableText = prospector.isBlockProspector() ? CACHED_BLOCK_SEARCH_TEXT : CACHED_ORE_SEARCH_TEXT;
         this.selectedTargets.addAll(prospector.getSelectedTargets(stack));
         this.range = ItemProspector.getRange(stack);
     }
@@ -81,6 +99,8 @@ public class GuiProspector extends GuiScreen {
 
         searchField = new GuiTextField(0, fontRenderer, 10, 10, leftW - 20, 14);
         searchField.setMaxStringLength(64);
+        searchField.setText(cachedSearchText());
+        searchField.setCursorPositionEnd();
         searchField.setFocused(true);
 
         listX = 10;
@@ -219,6 +239,7 @@ public class GuiProspector extends GuiScreen {
 
     @Override
     public void onGuiClosed() {
+        cacheSearchText();
         syncSettings();
     }
 
@@ -336,7 +357,10 @@ public class GuiProspector extends GuiScreen {
     }
 
     private IBlockState targetState(String target) {
-        return prospector.isBlockProspector() ? BlockTargets.state(target) : OreDictionaryBlocks.state(target);
+        if (!targetStates.containsKey(target)) {
+            targetStates.put(target, prospector.isBlockProspector() ? BlockTargets.state(target) : OreDictionaryBlocks.state(target));
+        }
+        return targetStates.get(target);
     }
 
     private void drawSelectionMark(int x, int y, boolean selected) {
@@ -392,30 +416,40 @@ public class GuiProspector extends GuiScreen {
 
     private List<String> filteredOres() {
         String filter = searchField == null ? "" : searchField.getText().trim().toLowerCase(Locale.ROOT);
-        List<String> filtered = new ArrayList<>();
-        for (String ore : targets) {
-            String displayName = localizedName(ore);
-            String label = targetLabel(ore);
-            if (filter.isEmpty()
-                    || label.toLowerCase(Locale.ROOT).contains(filter)
-                    || displayName.toLowerCase(Locale.ROOT).contains(filter)) {
-                filtered.add(ore);
+        if (filter.equals(cachedFilter)) {
+            return cachedFilteredTargets;
+        }
+
+        cachedFilter = filter;
+        if (filter.isEmpty()) {
+            cachedFilteredTargets = targets;
+        } else {
+            cachedFilteredTargets = new ArrayList<>();
+            for (String ore : targets) {
+                if (searchableText(ore).contains(filter)) {
+                    cachedFilteredTargets.add(ore);
+                }
             }
         }
-        return filtered;
+        return cachedFilteredTargets;
     }
 
     private String localizedName(String ore) {
-        if (prospector.isBlockProspector()) {
-            return BlockTargets.displayName(ore);
+        String name = displayNames.get(ore);
+        if (name == null) {
+            name = computeLocalizedName(ore);
+            displayNames.put(ore, name);
         }
-        ItemStack icon = icons.get(ore);
-        String name = icon == null || icon.isEmpty() ? ore : icon.getDisplayName();
-        return name == null || name.trim().isEmpty() ? ore : name;
+        return name;
     }
 
     private String targetLabel(String target) {
-        return prospector.isBlockProspector() ? target : OreDictionaryBlocks.oreName(target);
+        String label = targetLabels.get(target);
+        if (label == null) {
+            label = prospector.isBlockProspector() ? target : OreDictionaryBlocks.oreName(target);
+            targetLabels.put(target, label);
+        }
+        return label;
     }
 
     private String trimWithDots(String text, int width) {
@@ -471,6 +505,42 @@ public class GuiProspector extends GuiScreen {
 
     private int removeButtonY(int rowY) {
         return rowY + 6;
+    }
+
+    private String searchableText(String target) {
+        String text = searchableText.get(target);
+        if (text == null) {
+            text = (localizedName(target) + "\n" + targetLabel(target)).toLowerCase(Locale.ROOT);
+            searchableText.put(target, text);
+        }
+        return text;
+    }
+
+    private String computeLocalizedName(String target) {
+        if (prospector.isBlockProspector()) {
+            ItemStack icon = icons.get(target);
+            String name = icon == null || icon.isEmpty() ? null : icon.getDisplayName();
+            if (name != null && !name.trim().isEmpty() && !name.equals(target)) {
+                return name;
+            }
+            return BlockTargets.displayName(target);
+        }
+        ItemStack icon = icons.get(target);
+        String name = icon == null || icon.isEmpty() ? target : icon.getDisplayName();
+        return name == null || name.trim().isEmpty() ? target : name;
+    }
+
+    private String cachedSearchText() {
+        return prospector.isBlockProspector() ? cachedBlockSearchText : cachedOreSearchText;
+    }
+
+    private void cacheSearchText() {
+        String text = searchField == null ? "" : searchField.getText();
+        if (prospector.isBlockProspector()) {
+            cachedBlockSearchText = text;
+        } else {
+            cachedOreSearchText = text;
+        }
     }
 
     private void toggleOre(String ore) {
