@@ -35,6 +35,7 @@ import net.minecraft.util.SoundCategory;
 import net.minecraft.util.SoundEvent;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.IWorldEventListener;
@@ -678,7 +679,7 @@ public enum ProspectorXrayRenderer {
             }
 
             IBakedModel model = minecraft.getBlockRendererDispatcher().getModelForState(current);
-            if (usesTileEntityRenderer(current, model)) {
+            if (usesTileEntityRenderer(world, ore.pos, current, model)) {
                 if (world.getTileEntity(ore.pos) != null) {
                     rendered++;
                 }
@@ -702,16 +703,38 @@ public enum ProspectorXrayRenderer {
                 || model != null && model.isBuiltInRenderer();
     }
 
+    private boolean usesTileEntityRenderer(World world, BlockPos pos, IBlockState state, IBakedModel model) {
+        if (usesTileEntityRenderer(state, model)) {
+            return true;
+        }
+        return hasTileEntityRenderer(world, pos)
+                && (state.getRenderType() == EnumBlockRenderType.INVISIBLE
+                || model != null && state.getRenderType() == EnumBlockRenderType.MODEL && isEmptyBakedModel(state, model));
+    }
+
+    private static boolean hasTileEntityRenderer(World world, BlockPos pos) {
+        if (world == null) {
+            return false;
+        }
+        try {
+            TileEntity tileEntity = world.getTileEntity(pos);
+            return tileEntity != null && TileEntityRendererDispatcher.instance.getRenderer(tileEntity) != null;
+        } catch (RuntimeException | LinkageError ignored) {
+            return false;
+        }
+    }
+
     private boolean requiresDepthResolvedOverlay(IBlockState state, IBakedModel model, BlockPos pos) {
         if (usesTileEntityRenderer(state, model)) {
             return true;
         }
         IBlockState renderState = actualRenderState(state, pos);
+        IBlockState modelState = modelRenderState(model, state, renderState, pos);
         return renderState.getRenderType() != EnumBlockRenderType.MODEL
                 || !renderState.isFullCube()
                 || !renderState.isOpaqueCube()
                 || rendersOutsideSolidLayer(renderState)
-                || hasComplexBakedGeometry(renderState, model);
+                || hasComplexBakedGeometry(modelState, model);
     }
 
     private static boolean rendersOutsideSolidLayer(IBlockState state) {
@@ -735,12 +758,28 @@ public enum ProspectorXrayRenderer {
         return false;
     }
 
+    private static boolean isEmptyBakedModel(IBlockState state, IBakedModel model) {
+        return model != null && !model.isBuiltInRenderer() && !hasAnyQuad(model, state);
+    }
+
     private static int quadCount(IBakedModel model, IBlockState state, EnumFacing facing) {
         try {
             return model.getQuads(state, facing, 0L).size();
         } catch (RuntimeException ignored) {
             return 2;
         }
+    }
+
+    private static boolean hasAnyQuad(IBakedModel model, IBlockState state) {
+        if (quadCount(model, state, null) > 0) {
+            return true;
+        }
+        for (EnumFacing facing : EnumFacing.values()) {
+            if (quadCount(model, state, facing) > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void buildLayerBuffers(BlockRendererDispatcher dispatcher, Collection<TrackedOre> ores, EnumMap<BlockRenderLayer, VertexBuffer> buffers) {
@@ -758,17 +797,19 @@ public enum ProspectorXrayRenderer {
         try {
             ForgeHooksClient.setRenderLayer(layer);
             for (TrackedOre ore : ores) {
-                if (ore.pendingRemoval || usesTileEntityRenderer(ore.state, dispatcher.getModelForState(ore.state))) {
+                IBakedModel model = dispatcher.getModelForState(ore.state);
+                if (ore.pendingRemoval || usesTileEntityRenderer(overlayBlockAccess.world, ore.pos, ore.state, model)) {
                     continue;
                 }
 
                 IBlockState renderState = actualRenderState(ore.state, ore.pos);
-                if (!renderState.getBlock().canRenderInLayer(renderState, layer)) {
+                IBlockState modelState = modelRenderState(model, ore.state, renderState, ore.pos);
+                if (!modelState.getBlock().canRenderInLayer(modelState, layer)) {
                     continue;
                 }
 
                 try {
-                    dispatcher.renderBlock(renderState, ore.pos, overlayBlockAccess, buffer);
+                    renderOverlayModel(dispatcher, model, renderState, modelState, ore.pos, buffer);
                 } catch (RuntimeException ignored) {
                     // Broken mod models should not poison the whole overlay cache.
                 }
@@ -787,9 +828,37 @@ public enum ProspectorXrayRenderer {
         return vbo;
     }
 
+    private void renderOverlayModel(BlockRendererDispatcher dispatcher, IBakedModel model, IBlockState renderState, IBlockState modelState, BlockPos pos, BufferBuilder buffer) {
+        if (modelState != renderState && modelState.getRenderType() == EnumBlockRenderType.MODEL && model != null) {
+            dispatcher.getBlockModelRenderer().renderModel(overlayBlockAccess, model, modelState, pos, buffer, false, MathHelper.getPositionRandom(pos));
+            return;
+        }
+        dispatcher.renderBlock(renderState, pos, overlayBlockAccess, buffer);
+    }
+
+    private IBlockState modelRenderState(IBakedModel model, IBlockState state, IBlockState renderState, BlockPos pos) {
+        if (model == null || model.isBuiltInRenderer() || hasAnyQuad(model, renderState)) {
+            return renderState;
+        }
+        IBlockState extendedState = extendedRenderState(state, pos);
+        return extendedState != renderState && hasAnyQuad(model, extendedState) ? extendedState : renderState;
+    }
+
     private IBlockState actualRenderState(IBlockState state, BlockPos pos) {
         try {
             return copySharedProperties(state, state.getActualState(overlayBlockAccess, pos));
+        } catch (RuntimeException ignored) {
+            return state;
+        }
+    }
+
+    private IBlockState extendedRenderState(IBlockState state, BlockPos pos) {
+        if (overlayBlockAccess.world == null) {
+            return state;
+        }
+        try {
+            World world = overlayBlockAccess.world;
+            return copySharedProperties(state, state.getBlock().getExtendedState(state.getActualState(world, pos), world, pos));
         } catch (RuntimeException ignored) {
             return state;
         }
@@ -1729,7 +1798,8 @@ public enum ProspectorXrayRenderer {
                     return true;
                 }
                 IBakedModel model = minecraft.getBlockRendererDispatcher().getModelForState(ore.state);
-                if (ProspectorXrayRenderer.this.requiresDepthResolvedOverlay(ore.state, model, ore.pos)) {
+                if (usesTileEntityRenderer(overlayBlockAccess.world, ore.pos, ore.state, model)
+                        || ProspectorXrayRenderer.this.requiresDepthResolvedOverlay(ore.state, model, ore.pos)) {
                     return true;
                 }
             }
@@ -1751,7 +1821,7 @@ public enum ProspectorXrayRenderer {
 
         private boolean hasTileEntityOverlay() {
             for (TrackedOre ore : ores) {
-                if (!ore.pendingRemoval && usesTileEntityRenderer(ore.state, Minecraft.getMinecraft().getBlockRendererDispatcher().getModelForState(ore.state))) {
+                if (!ore.pendingRemoval && usesTileEntityRenderer(overlayBlockAccess.world, ore.pos, ore.state, Minecraft.getMinecraft().getBlockRendererDispatcher().getModelForState(ore.state))) {
                     return true;
                 }
             }
@@ -1768,7 +1838,7 @@ public enum ProspectorXrayRenderer {
         private boolean renderTileEntityMasks(BufferBuilder buffer) {
             boolean rendered = false;
             for (TrackedOre ore : ores) {
-                if (ore.pendingRemoval || !usesTileEntityRenderer(ore.state, Minecraft.getMinecraft().getBlockRendererDispatcher().getModelForState(ore.state))) {
+                if (ore.pendingRemoval || !usesTileEntityRenderer(overlayBlockAccess.world, ore.pos, ore.state, Minecraft.getMinecraft().getBlockRendererDispatcher().getModelForState(ore.state))) {
                     continue;
                 }
                 putFilledBox(buffer, ore.bounds);
@@ -1779,7 +1849,7 @@ public enum ProspectorXrayRenderer {
 
         private void renderTileEntities(World world, float partialTicks, boolean depthPass) {
             for (TrackedOre ore : ores) {
-                if (ore.pendingRemoval || !usesTileEntityRenderer(ore.state, Minecraft.getMinecraft().getBlockRendererDispatcher().getModelForState(ore.state))) {
+                if (ore.pendingRemoval || !usesTileEntityRenderer(world, ore.pos, ore.state, Minecraft.getMinecraft().getBlockRendererDispatcher().getModelForState(ore.state))) {
                     continue;
                 }
                 TileEntity tileEntity = world.getTileEntity(ore.pos);
