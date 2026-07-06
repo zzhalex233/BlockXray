@@ -13,6 +13,8 @@ import net.minecraft.client.gui.GuiTextField;
 import net.minecraft.client.resources.I18n;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.EnumHand;
+import net.minecraftforge.fml.common.Loader;
+import net.minecraftforge.fml.common.ModContainer;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 import org.lwjgl.input.Mouse;
@@ -39,9 +41,13 @@ public class GuiProspector extends GuiScreen {
     private static final Map<String, String> CACHED_BLOCK_DISPLAY_NAMES = new HashMap<>();
     private static final Map<String, String> CACHED_BLOCK_LABELS = new HashMap<>();
     private static final Map<String, String> CACHED_BLOCK_SEARCH_TEXT = new HashMap<>();
+    private static final Map<String, String> CACHED_BLOCK_DOLLAR_SEARCH_TEXT = new HashMap<>();
+    private static final Map<String, String> CACHED_BLOCK_MOD_SEARCH_TEXT = new HashMap<>();
     private static final Map<String, String> CACHED_ORE_DISPLAY_NAMES = new HashMap<>();
     private static final Map<String, String> CACHED_ORE_LABELS = new HashMap<>();
     private static final Map<String, String> CACHED_ORE_SEARCH_TEXT = new HashMap<>();
+    private static final Map<String, String> CACHED_ORE_DOLLAR_SEARCH_TEXT = new HashMap<>();
+    private static final Map<String, String> CACHED_ORE_MOD_SEARCH_TEXT = new HashMap<>();
 
     private final ItemStack stack;
     private final EnumHand hand;
@@ -52,6 +58,8 @@ public class GuiProspector extends GuiScreen {
     private final Map<String, String> displayNames;
     private final Map<String, String> targetLabels;
     private final Map<String, String> searchableText;
+    private final Map<String, String> dollarSearchText;
+    private final Map<String, String> modSearchText;
     private final Map<String, IBlockState> targetStates = new HashMap<>();
 
     private GuiTextField searchField;
@@ -85,6 +93,8 @@ public class GuiProspector extends GuiScreen {
         this.displayNames = prospector.isBlockProspector() ? CACHED_BLOCK_DISPLAY_NAMES : CACHED_ORE_DISPLAY_NAMES;
         this.targetLabels = prospector.isBlockProspector() ? CACHED_BLOCK_LABELS : CACHED_ORE_LABELS;
         this.searchableText = prospector.isBlockProspector() ? CACHED_BLOCK_SEARCH_TEXT : CACHED_ORE_SEARCH_TEXT;
+        this.dollarSearchText = prospector.isBlockProspector() ? CACHED_BLOCK_DOLLAR_SEARCH_TEXT : CACHED_ORE_DOLLAR_SEARCH_TEXT;
+        this.modSearchText = prospector.isBlockProspector() ? CACHED_BLOCK_MOD_SEARCH_TEXT : CACHED_ORE_MOD_SEARCH_TEXT;
         this.selectedTargets.addAll(prospector.getSelectedTargets(stack));
         this.range = ItemProspector.getRange(stack);
     }
@@ -426,7 +436,7 @@ public class GuiProspector extends GuiScreen {
         } else {
             cachedFilteredTargets = new ArrayList<>();
             for (String ore : targets) {
-                if (searchableText(ore).contains(filter)) {
+                if (matchesFilter(ore, filter)) {
                     cachedFilteredTargets.add(ore);
                 }
             }
@@ -514,6 +524,81 @@ public class GuiProspector extends GuiScreen {
             searchableText.put(target, text);
         }
         return text;
+    }
+
+    private boolean matchesFilter(String target, String filter) {
+        if (filter.indexOf('$') < 0 && filter.indexOf('@') < 0) {
+            return searchableText(target).contains(filter);
+        }
+        for (String token : filter.split("\\s+")) {
+            if (!token.isEmpty() && !matchesToken(target, token)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean matchesToken(String target, String token) {
+        if (token.length() <= 1) {
+            return true;
+        }
+        if (token.charAt(0) == '$') {
+            return dollarSearchText(target).contains(token.substring(1));
+        }
+        if (token.charAt(0) == '@') {
+            return modSearchText(target).contains(token.substring(1));
+        }
+        return searchableText(target).contains(token);
+    }
+
+    private String dollarSearchText(String target) {
+        String text = dollarSearchText.get(target);
+        if (text == null) {
+            text = prospector.isBlockProspector() ? String.join("\n", BlockTargets.oreNames(target)) : OreDictionaryBlocks.oreName(target);
+            text = text.toLowerCase(Locale.ROOT);
+            dollarSearchText.put(target, text);
+        }
+        return text;
+    }
+
+    private String modSearchText(String target) {
+        String text = modSearchText.get(target);
+        if (text == null) {
+            String modId = modId(target);
+            String modName = modName(modId);
+            text = (modId + "\n" + stripSpaces(modId) + "\n" + modName + "\n" + stripSpaces(modName)).toLowerCase(Locale.ROOT);
+            modSearchText.put(target, text);
+        }
+        return text;
+    }
+
+    private static String modId(String target) {
+        String registryName = registryName(target);
+        int separator = registryName.indexOf(':');
+        return separator <= 0 ? "" : registryName.substring(0, separator);
+    }
+
+    private static String registryName(String target) {
+        int targetSeparator = target.indexOf('|');
+        String registryName = targetSeparator < 0 ? target : target.substring(targetSeparator + 1);
+        int metaSeparator = registryName.lastIndexOf('@');
+        return metaSeparator <= 0 ? registryName : registryName.substring(0, metaSeparator);
+    }
+
+    private static String modName(String modId) {
+        ModContainer mod = Loader.instance().getIndexedModList().get(modId);
+        return mod == null ? modId : mod.getName();
+    }
+
+    private static String stripSpaces(String text) {
+        StringBuilder builder = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (!Character.isWhitespace(c)) {
+                builder.append(c);
+            }
+        }
+        return builder.toString();
     }
 
     private String computeLocalizedName(String target) {

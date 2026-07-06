@@ -30,6 +30,7 @@ import java.util.Set;
 
 public final class BlockTargets {
     private static final String META_SEPARATOR = "@";
+    private static final Map<Block, Set<Integer>> ITEM_METAS = new HashMap<>();
     private static final Map<Block, Boolean> EXTERNAL_META_BLOCKS = new HashMap<>();
     private static Map<String, ItemStack> cachedVisibleTargetIcons;
     private static Map<String, ItemStack> cachedIcons;
@@ -80,6 +81,23 @@ public final class BlockTargets {
 
         String blockName = block.getLocalizedName();
         return validDisplayName(blockName, block.getTranslationKey() + ".name") ? blockName : name;
+    }
+
+    public static Set<String> oreNames(String name) {
+        Target target = parseTarget(name);
+        Block block = target == null ? blockByName(name) : target.block;
+        if (block == null || block == Blocks.AIR) {
+            return Collections.emptySet();
+        }
+
+        Set<String> names = new LinkedHashSet<>();
+        Item item = Item.getItemFromBlock(block);
+        if (item != null && item != Items.AIR) {
+            for (int meta : target == null || target.matchAll ? itemMetas(block) : Collections.singleton(target.meta)) {
+                addOreNames(names, new ItemStack(item, 1, meta));
+            }
+        }
+        return names;
     }
 
     public static ProspectorMatcher matcher(Set<String> selectedBlocks) {
@@ -318,10 +336,15 @@ public final class BlockTargets {
     }
 
     private static Set<Integer> itemMetas(Block block) {
+        Set<Integer> cached = ITEM_METAS.get(block);
+        if (cached != null) {
+            return cached;
+        }
+
         Set<Integer> metas = new LinkedHashSet<>();
         Item item = Item.getItemFromBlock(block);
         if (item == null || item == Items.AIR) {
-            return metas;
+            return cacheItemMetas(block, metas);
         }
 
         NonNullList<ItemStack> stacks = NonNullList.create();
@@ -341,7 +364,13 @@ public final class BlockTargets {
         if (metas.isEmpty()) {
             metas.add(0);
         }
-        return metas;
+        return cacheItemMetas(block, metas);
+    }
+
+    private static Set<Integer> cacheItemMetas(Block block, Set<Integer> metas) {
+        Set<Integer> result = Collections.unmodifiableSet(metas);
+        ITEM_METAS.put(block, result);
+        return result;
     }
 
     private static void collectItemStacks(Item item, NonNullList<ItemStack> stacks) {
@@ -360,7 +389,7 @@ public final class BlockTargets {
 
     private static void collectDroppedMetas(Block block, Set<Integer> metas) {
         for (IBlockState state : block.getBlockState().getValidStates()) {
-            metas.add(targetMeta(state));
+            metas.add(droppedMeta(state));
         }
     }
 
@@ -383,6 +412,15 @@ public final class BlockTargets {
 
     private static boolean validDisplayName(String name, String missingValue) {
         return name != null && !name.trim().isEmpty() && !name.equals(missingValue);
+    }
+
+    private static void addOreNames(Set<String> names, ItemStack stack) {
+        if (stack.isEmpty()) {
+            return;
+        }
+        for (int oreId : OreDictionary.getOreIDs(stack)) {
+            names.add(OreDictionary.getOreName(oreId));
+        }
     }
 
     private static String targetId(Block block, int meta) {
@@ -433,8 +471,25 @@ public final class BlockTargets {
     }
 
     private static int targetMeta(IBlockState state) {
+        int meta = droppedMeta(state);
+        Set<Integer> metas = itemMetas(state.getBlock());
+        if (metas.isEmpty() || metas.contains(meta)) {
+            return meta;
+        }
+        return blockMeta(state);
+    }
+
+    private static int droppedMeta(IBlockState state) {
         try {
             return state.getBlock().damageDropped(state);
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
+    private static int blockMeta(IBlockState state) {
+        try {
+            return state.getBlock().getMetaFromState(state);
         } catch (RuntimeException ignored) {
             return 0;
         }
