@@ -16,6 +16,7 @@ BlockXray是一个为整合包写的私货
 ## 画廊
 ![GUI界面](gallery/gui.png)
 ![效果展示](gallery/view.png)
+![效果展示.png](gallery/view1.png)
 
 ---
 
@@ -33,3 +34,4 @@ BlockXray is a utility prospecting mod for 1.12.2 modpacks.
 ## Gallery
 ![GUI page](gallery/gui.png)
 ![dispaly](gallery/view.png)
+![display.png](gallery/view1.png)
